@@ -43,7 +43,6 @@ def google_login_or_create_user(request, id_token, client_id):
             display_photo = DisplayPhoto(
                 content_object=profile,
                 is_primary=True,
-                is_active=True,
             )
             display_photo.image.save(
                 f"{user.email}_avatar.jpg", ContentFile(img_temp.read()), save=True

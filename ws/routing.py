@@ -4,9 +4,10 @@ from channels.security.websocket import AllowedHostsOriginValidator
 from django.core.asgi import get_asgi_application
 from django.urls import re_path
 
-from .middleware.token_auth_middleware import TokenAuthMiddleware
 
 django_asgi_app = get_asgi_application()
+
+from .middleware.token_auth_middleware import TokenAuthMiddleware
 
 
 def get_websocket_urlpatterns():

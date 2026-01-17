@@ -16,10 +16,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
-from webauthn import (generate_authentication_options,
-                      generate_registration_options,
-                      verify_authentication_response,
-                      verify_registration_response)
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    verify_authentication_response,
+    verify_registration_response,
+)
 
 from apps.Site.tasks.flush_expired_tokens import flush_expired_token
 
@@ -107,8 +109,6 @@ def refresh_token(request):
     try:
         old_refresh = RefreshToken(token_str)
         session = ActiveSession.objects.filter(jti=str(old_refresh["jti"])).first()
-        if not session or not session.is_active():
-            return Response({"error": "Session revoked"}, status=401)
 
         new_refresh = create_refresh_token_for_user(session.user)
         new_refresh.set_jti()

@@ -1,12 +1,40 @@
-media/
-*.mp4
-*.mov
-*.webm
-*.avi
-
+# === Python ===
 __pycache__/
-*.pyc
-.env
-.git
-.gitignore
-node_modules/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtualenv
+venv/
+# .env/
+# .env.*
+
+# === Django ===
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Media & uploads
+media/
+protected_files/
+
+# === Static ===
+staticfiles/
+static/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Git ===
+.git/
+
+# === Docker ===
+*.env
+docker-compose.override.yml

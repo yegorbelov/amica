@@ -1,23 +1,37 @@
 from django.urls import reverse
 from rest_framework import serializers
 
+from apps.accounts.models.models import CustomUser, Profile
 from apps.accounts.serializers.serializers import UserSerializer
 from apps.media_files.models import ImageFile, VideoFile
-from apps.media_files.serializers.serializers import (FileSerializer,
-                                                      ImageFileSerializer,
-                                                      VideoFileSerializer)
+from apps.media_files.serializers.serializers import (
+    FileSerializer,
+    ImageFileSerializer,
+    VideoFileSerializer,
+)
 
 from .models import *
 
+# class UserProfileSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Profile
+#         fields = ["primary_avatar"]
+
+
+class UserMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ["id", "username"]
+
 
 class MessageSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
+    user = UserMessageSerializer(read_only=True)
     files = serializers.SerializerMethodField()
-    reactions_summary = serializers.SerializerMethodField()
-    user_reaction = serializers.SerializerMethodField()
+    # reactions_summary = serializers.SerializerMethodField()
+    # user_reaction = serializers.SerializerMethodField()
     is_own = serializers.SerializerMethodField()
-    reply_to_message = serializers.SerializerMethodField()
-    view_count = serializers.SerializerMethodField()
+    # reply_to_message = serializers.SerializerMethodField()
+    # view_count = serializers.SerializerMethodField()
     is_viewed = serializers.SerializerMethodField()
     viewers = serializers.SerializerMethodField()
 
@@ -28,18 +42,16 @@ class MessageSerializer(serializers.ModelSerializer):
             "value",
             "date",
             "user",
-            "chat",
+            # "chat",
             "files",
-            "reactions_summary",
-            "user_reaction",
+            # "reactions_summary",
+            # "user_reaction",
             "is_own",
-            "is_deleted",
-            "edit_date",
-            "forwarded",
-            "reply_to",
-            "reply_to_message",
-            "view_count",
-            "viewed_by",
+            # "is_deleted",
+            # "edit_date",
+            # "forwarded",
+            # "reply_to",
+            # "reply_to_message",
             "is_viewed",
             "viewers",
         ]
@@ -59,14 +71,14 @@ class MessageSerializer(serializers.ModelSerializer):
             serialized_files.append(serializer.data)
         return serialized_files
 
-    def get_view_count(self, obj):
-        return obj.view_count
-
     def get_is_viewed(self, obj):
         request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            return obj.is_viewed_by_user(request.user)
-        return False
+        if not request or not request.user.is_authenticated:
+            return False
+
+        recipients = getattr(obj, "read_recipients", [])
+
+        return any(r.user_id == request.user.id for r in recipients)
 
     def get_reactions_summary(self, obj):
         from collections import Counter
@@ -99,7 +111,6 @@ class MessageSerializer(serializers.ModelSerializer):
             return obj.user.id == request.user.id
 
         user_id = self.context.get("user_id")
-        print(user_id, obj.user.id)
         if user_id:
             return obj.user.id == user_id
 
@@ -120,9 +131,9 @@ class MessageSerializer(serializers.ModelSerializer):
         return None
 
     def get_viewers(self, obj):
-        recipients = obj.recipients.filter(read_date__isnull=False).exclude(
-            user=obj.user
-        )
+        recipients = getattr(obj, "read_recipients", [])
+
+        recipients = [r for r in recipients if r.user_id != obj.user_id]
 
         return MessageRecipientSerializer(
             recipients, many=True, context=self.context
@@ -138,7 +149,13 @@ class MessageRecipientSerializer(serializers.ModelSerializer):
 
     def get_user(self, obj):
         request = self.context.get("request")
-        return UserSerializer(obj.user, context={"request": request}).data
+        return UserViewerSerializer(obj.user, context={"request": request}).data
+
+
+class UserViewerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ["id", "username"]
 
 
 class MessageReactionSerializer(serializers.ModelSerializer):
@@ -147,72 +164,6 @@ class MessageReactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = MessageReaction
         fields = ["id", "user", "reaction_type", "created_at"]
-        read_only_fields = fields
-
-
-class ChatListSerializer(serializers.ModelSerializer):
-    last_message = serializers.SerializerMethodField()
-    unread_count = serializers.SerializerMethodField()
-    other_users = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Chat
-        fields = [
-            "id",
-            "name",
-            "chat_type",
-            "image",
-            "last_message",
-            "unread_count",
-            "other_users",
-            "updated_at",
-        ]
-        read_only_fields = fields
-
-    def get_last_message(self, obj):
-        last_msg = obj.last_message
-        if last_msg and not last_msg.is_deleted:
-            return {
-                "content": (
-                    last_msg.value[:100] + "..."
-                    if last_msg.value and len(last_msg.value) > 100
-                    else last_msg.value
-                ),
-                "date": (
-                    last_msg.date.isoformat()
-                    if hasattr(last_msg.date, "isoformat")
-                    else str(last_msg.date)
-                ),
-                "user_name": last_msg.user.display_name,
-            }
-        return None
-
-    def get_unread_count(self, obj):
-        request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            return (
-                obj.messages.exclude(viewed_by=request.user)
-                .exclude(user=request.user)
-                .count()
-            )
-        return 0
-
-    def get_other_users(self, obj):
-        request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            other_users = obj.users.exclude(id=request.user.id)
-            return UserSerializer(other_users, many=True).data
-        return []
-
-
-class ChatSerializerMessage(serializers.ModelSerializer):
-    # Chat = MessageSerializerChat(many=True, read_only=True)
-    users = UserSerializer(many=True, read_only=True)
-    # last_message = serializers.Field(source="latest")
-
-    class Meta:
-        model = Chat
-        fields = ("name", "users", "chat_type", "id", "image")
         read_only_fields = fields
 
 
@@ -309,25 +260,40 @@ class ContactSerializer(serializers.ModelSerializer):
         return chat.id if chat else None
 
 
-class MessageSerializerChat(serializers.ModelSerializer):
-    class Meta:
-        model = Message
-        fields = ("viewed", "user")
-        read_only_fields = fields
-
-
 from rest_framework import serializers
 
 from apps.accounts.serializers.serializers import UserSerializer
-from apps.media_files.serializers.serializers import DisplayMediaSerializer
+from apps.media_files.models.models import DisplayMedia
+from apps.media_files.serializers.serializers import (
+    DisplayMediaChatListSerializer,
+    DisplayMediaSerializer,
+)
 
 
-class ChatSerializer(serializers.ModelSerializer):
+class MessageChatListSerializer(MessageSerializer):
+    user = UserMessageSerializer(read_only=True)
+    files = serializers.SerializerMethodField()
+
+    def get_files(self, obj):
+        files = obj.file.all()[:3]
+        serialized = []
+        for f in files:
+            if isinstance(f, ImageFile):
+                serialized.append(ImageFileSerializer(f, context=self.context).data)
+            elif isinstance(f, VideoFile):
+                serialized.append(VideoFileSerializer(f, context=self.context).data)
+            else:
+                serialized.append(FileSerializer(f, context=self.context).data)
+        return serialized
+
+    class Meta(MessageSerializer.Meta):
+        fields = ("id", "value", "files", "date", "user")
+
+
+class ChatListSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
-    users = UserSerializer(many=True, read_only=True)
     last_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
-    media = serializers.SerializerMethodField()
     primary_media = serializers.SerializerMethodField()
     info = serializers.SerializerMethodField()
 
@@ -336,14 +302,168 @@ class ChatSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
-            "users",
             "chat_type",
             "last_message",
             "unread_count",
-            "media",
             "primary_media",
             "info",
         ]
+
+    def _get_display_cached(self, obj):
+        if not hasattr(self, "_display_cache"):
+            self._display_cache = {}
+
+        if obj.pk not in self._display_cache:
+            self._display_cache[obj.pk] = self._resolve_display(obj)
+
+        return self._display_cache[obj.pk]
+
+    def _get_interlocutor_cached(self, obj):
+        if not hasattr(self, "_interlocutor_cache"):
+            self._interlocutor_cache = {}
+
+        if obj.pk not in self._interlocutor_cache:
+            interlocutors_map = self.context.get("interlocutors_map", {})
+            self._interlocutor_cache[obj.pk] = interlocutors_map.get(obj.pk)
+
+        return self._interlocutor_cache[obj.pk]
+
+    def _get_contact_cached(self, interlocutor):
+        if not hasattr(self, "_contact_cache"):
+            self._contact_cache = {}
+        if not interlocutor:
+            return None
+
+        key = interlocutor.pk
+        if key not in self._contact_cache:
+            self._contact_cache[key] = self.context["contacts_map"].get(key)
+        return self._contact_cache[key]
+
+    def _get_current_user(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def _get_first_media(self, obj, media_map=None):
+        avatar_list = getattr(obj, "primary_display_media", [])
+        if avatar_list:
+            return avatar_list[0]
+
+        if media_map:
+            ct_chat_id = self.context.get("ct_chat_id")
+            return media_map.get((ct_chat_id, obj.id))
+
+        return None
+
+    def _resolve_display(self, obj):
+        user = self._get_current_user()
+        media_map = self.context.get("media_map", {})
+
+        if not obj.is_dialog or not user:
+            avatar = self._get_first_media(obj, media_map)
+            return {"name": obj.name, "avatar": avatar, "last_seen": None}
+
+        interlocutor = self._get_interlocutor_cached(obj)
+        if not interlocutor:
+            return {"name": obj.name, "avatar": None, "last_seen": None}
+
+        contact = self._get_contact_cached(interlocutor)
+        profile = getattr(interlocutor, "profile", None)
+
+        name = (
+            contact.name
+            if contact and contact.name
+            else getattr(interlocutor, "display_name", "Unknown")
+        )
+
+        ct_contact_id = self.context.get("ct_contact_id")
+        ct_profile_id = self.context.get("ct_profile_id")
+
+        avatar = None
+        if contact and ct_contact_id:
+            avatar = media_map.get((ct_contact_id, contact.id))
+
+        if not avatar and profile and ct_profile_id:
+            avatar = media_map.get((ct_profile_id, profile.id))
+
+        last_seen = getattr(profile, "last_seen", None)
+
+        return {"name": name, "avatar": avatar, "last_seen": last_seen}
+
+    def get_primary_media(self, obj):
+        avatar = self._get_display_cached(obj)["avatar"]
+        if isinstance(avatar, DisplayMedia):
+            return DisplayMediaChatListSerializer(avatar, context=self.context).data
+        return None
+
+    def get_name(self, obj):
+        return self._get_display_cached(obj)["name"]
+
+    def get_info(self, obj):
+        if obj.is_dialog:
+            return self._get_display_cached(obj)["last_seen"]
+        return obj.users_count
+
+    def get_last_message(self, obj):
+        message = getattr(obj, "last_message", None)
+        return (
+            MessageChatListSerializer(message, context=self.context).data
+            if message
+            else None
+        )
+
+    def get_unread_count(self, obj):
+        return getattr(obj, "unread_count", 0)
+
+
+class ChatUserSerializer(serializers.ModelSerializer):
+    is_contact = serializers.SerializerMethodField()
+    contact_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = (
+            "id",
+            "is_contact",
+            "contact_id",
+        )
+
+    def _get_contacts_cache(self):
+        if not hasattr(self, "_contacts_cache"):
+            user = self.context["request"].user
+            self._contacts_cache = {
+                c.user_id: c for c in Contact.objects.filter(owner=user)
+            }
+        return self._contacts_cache
+
+    def get_is_contact(self, obj):
+        return self.get_contact_id(obj) is not None
+
+    def get_contact_id(self, obj):
+        contact = self._get_contacts_cache().get(obj.pk)
+        return contact.id if contact else None
+
+
+class ChatSerializer(serializers.ModelSerializer):
+    messages = MessageSerializer(many=True, read_only=True)
+    media = serializers.SerializerMethodField()
+    users = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Chat
+        fields = [
+            "messages",
+            "media",
+            "users",
+        ]
+
+    def get_users(self, obj):
+        user = self._get_current_user()
+        qs = obj.users.all()
+
+        if user:
+            qs = qs.exclude(pk=user.pk)
+
+        return ChatUserSerializer(qs, many=True, context=self.context).data
 
     def _get_display_cached(self, obj):
         if not hasattr(self, "_display_cache"):
@@ -420,42 +540,6 @@ class ChatSerializer(serializers.ModelSerializer):
             "last_seen": profile.last_seen if profile else None,
         }
 
-    def get_name(self, obj):
-        return self._get_display_cached(obj)["name"]
-
-    def get_info(self, obj):
-        if obj.is_dialog:
-            return self._get_display_cached(obj)["last_seen"]
-        return obj.users.count()
-
-    def get_last_message(self, obj):
-        last_msg = obj.messages.order_by("-date").first()
-        if last_msg:
-            return MessageSerializer(last_msg, context=self.context).data
-        return None
-
-    def get_unread_count(self, obj):
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        if not user:
-            return 0
-
-        return (
-            obj.messages.filter(
-                recipients__user=user,
-                recipients__read_date__isnull=True,
-                recipients__is_deleted=False,
-            )
-            .exclude(user=user)
-            .count()
-        )
-
-    def get_primary_media(self, obj):
-        media = self._get_display_cached(obj)["avatar"]
-        return (
-            DisplayMediaSerializer(media, context=self.context).data if media else None
-        )
-
     def get_media(self, obj):
         user = self._get_current_user()
 
@@ -491,14 +575,27 @@ class ChatSerializer(serializers.ModelSerializer):
         return DisplayMediaSerializer(media_items, many=True, context=self.context).data
 
 
-class ChatListSerializer(ChatSerializer):
-    class Meta(ChatSerializer.Meta):
-        fields = [
-            "id",
-            "name",
-            "chat_type",
-            "last_message",
-            "unread_count",
-            "primary_media",
-            "info",
-        ]
+from django.conf import settings
+from urllib.parse import urljoin
+
+
+def build_absolute_url(path: str) -> str:
+    scheme = getattr(settings, "SITE_SCHEME", "http")
+    domain = getattr(settings, "SITE_DOMAIN", "localhost:8000")
+    base = f"{scheme}://{domain}"
+    return urljoin(base, path)
+
+
+class WallpaperSerializer(serializers.ModelSerializer):
+    file = serializers.ImageField(write_only=True)
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Wallpaper
+        fields = ["id", "file", "file_url", "created_at"]
+
+    def get_file_url(self, obj):
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.file.url)
+        return build_absolute_url(obj.file.url)

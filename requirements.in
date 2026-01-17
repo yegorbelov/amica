@@ -1,0 +1,38 @@
+# Core
+Django==6.0.1
+djangorestframework==3.16.*
+djangorestframework-simplejwt==5.5.*
+
+# Database
+psycopg2-binary==2.9.*
+
+# HTTP (urllib3 fix)
+requests==2.32.*
+urllib3==2.5.*
+
+# Real-time
+channels==4.3.*
+daphne==4.2.*
+channels_redis==4.3.*
+redis==7.*
+
+# Background tasks
+celery==5.5.*
+django-celery-beat
+django-celery-results==2.6.0
+
+# Media processing
+pillow==12.1.0
+django-imagekit==6.0.0
+django-polymorphic==4.1.0
+
+# Development tools
+django-environ==0.12.0
+django-extensions==4.1
+django-cors-headers==4.9.0
+django-sslserver==0.22
+django-silk==5.4.3
+webauthn==2.7.0
+django-webauthn==0.0.2
+watchfiles==1.1.1
+black==25.12.0

@@ -13,7 +13,9 @@ urlpatterns = [
     path("api/", include("apps.Site.urls")),
     path("api/", include("apps.accounts.urls")),
     path("api/media_files/", include("apps.media_files.urls")),
+    path("silk/", include("silk.urls", namespace="silk")),
 ]
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

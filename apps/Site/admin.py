@@ -4,8 +4,18 @@ from django.utils.html import format_html
 
 from apps.media_files.models.models import DisplayPhoto, DisplayVideo
 
-from .models import (Chat, ChatMember, Contact, Message, MessageReaction,
-                     MessageRecipient)
+from .models import (
+    Chat,
+    ChatMember,
+    Contact,
+    Message,
+    MessageReaction,
+    MessageRecipient,
+    Wallpaper,
+    ChatMemberWallpaper,
+    ChatWallpaper,
+    UserWallpaper,
+)
 
 
 class ChatPhotoInline(GenericTabularInline):
@@ -75,3 +85,7 @@ class MessageAdmin(admin.ModelAdmin):
 admin.site.register(MessageReaction)
 admin.site.register(MessageRecipient)
 admin.site.register(ChatMember)
+admin.site.register(Wallpaper)
+admin.site.register(ChatMemberWallpaper)
+admin.site.register(ChatWallpaper)
+admin.site.register(UserWallpaper)

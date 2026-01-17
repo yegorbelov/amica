@@ -11,11 +11,6 @@ from ..models import ActiveSession
 
 
 def update_user_session_lifetime(user, days, current_refresh_token=None):
-    """
-    Обновляет preferred_session_lifetime_days пользователя и пересчитывает
-    expires_at всех его активных сессий.
-    Возвращает список словарей сессий для уведомления устройств.
-    """
     user.preferred_session_lifetime_days = days
     user.save(update_fields=["preferred_session_lifetime_days"])
 
@@ -30,7 +25,6 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
     session_dicts = []
 
     for session in sessions:
-        # Особые короткие значения (секунды)
         if days in [500, 1000, 3000, 6000]:
             expires_at = timezone.now() + timedelta(seconds=days / 100)
         else:
@@ -39,7 +33,6 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
         session.expires_at = expires_at
         session.save()
 
-        # Запланировать удаление токена (celery task)
         flush_expired_token.apply_async(args=[session.id], eta=expires_at)
 
         session_dicts.append(
@@ -54,7 +47,6 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
             }
         )
 
-    # Отправляем уведомление через channels всем устройствам пользователя
     channel_layer = get_channel_layer()
     for session_data in session_dicts:
         async_to_sync(channel_layer.group_send)(
@@ -65,7 +57,6 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
             },
         )
 
-    # Уведомление о новом времени жизни
     async_to_sync(channel_layer.group_send)(
         f"user_{user.id}",
         {

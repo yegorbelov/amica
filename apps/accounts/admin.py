@@ -96,12 +96,6 @@ class ProfileAdmin(admin.ModelAdmin):
     search_fields = ("user__email", "user__username", "bio", "phone")
 
 
-from django.contrib import admin
-from django.utils import timezone
-
-from .models import ActiveSession
-
-
 @admin.register(ActiveSession)
 class ActiveSessionAdmin(admin.ModelAdmin):
     list_display = (
@@ -110,13 +104,11 @@ class ActiveSessionAdmin(admin.ModelAdmin):
         "created_at_display",
         "expires_at_display",
         "last_active_display",
-        "is_active",
     )
     readonly_fields = (
         "created_at_display",
         "expires_at_display",
         "last_active_display",
-        "is_active",
     )
 
     def created_at_display(self, obj):

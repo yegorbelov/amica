@@ -1,10 +1,13 @@
 import logging
 import os
+from mimetypes import guess_type
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.core.files.storage import FileSystemStorage
+from django.db import connection
 from django.db.models import Count, OuterRef, Prefetch, Q, Subquery
 from django.http import FileResponse, Http404, JsonResponse
 from rest_framework import status, viewsets
@@ -12,13 +15,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from urllib3 import request
+
+from apps.media_files.models.models import DisplayPhoto, DisplayVideo, File
 
 from ..accounts.forms import *
 from .models import *
 from .serializers import *
 from .serializers import MessageSerializer
 from .utils import *
+
+protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,46 +34,177 @@ class GetChats(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        last_message_subquery = (
-            Message.objects.filter(
-                chat=OuterRef("pk"),
-                recipients__user=request.user,
-                recipients__is_deleted=False,
-                is_deleted=False,
-            )
-            .order_by("-date")
-            .values("id")[:1]
-        )
+        user = request.user
 
-        unread_subquery = (
-            MessageRecipient.objects.filter(
-                message__chat=OuterRef("pk"),
-                user=request.user,
-                is_deleted=False,
-                read_date__isnull=True,
-            )
-            .exclude(message__user=request.user)
-            .values("message__chat")
-            .annotate(count=Count("id"))
-            .values("count")[:1]
-        )
+        last_message_subquery = Message.objects.filter(
+            chat_id=OuterRef("pk"), is_deleted=False
+        ).order_by("-date")
 
-        chats = (
-            Chat.objects.filter(users=request.user)
-            .prefetch_related(
-                "display_media",
-                "users__profile__profile_media",
-                "users__contacts__display_media",
-            )
+        chats_qs = (
+            Chat.objects.filter(users=user)
             .annotate(
-                last_message_id=Subquery(last_message_subquery),
-                unread_count=Subquery(unread_subquery),
+                users_count=Count("users", distinct=True),
+                last_message_id=Subquery(last_message_subquery.values("id")[:1]),
             )
-            .order_by("-last_message_id")
+            .order_by("-created_at")
+            .prefetch_related(
+                Prefetch(
+                    "chatmember_set",
+                    queryset=ChatMember.objects.exclude(user=user).select_related(
+                        "user__profile"
+                    ),
+                    to_attr="other_members",
+                )
+            )
         )
 
-        serializer = ChatSerializer(chats, many=True, context={"request": request})
-        return JsonResponse({"chats": serializer.data})
+        dialog_interlocutor_ids = [
+            member.user.id
+            for chat in chats_qs
+            if chat.is_dialog
+            for member in getattr(chat, "other_members", [])
+        ]
+
+        contacts_qs = Contact.objects.filter(
+            owner=user, user_id__in=dialog_interlocutor_ids
+        ).select_related("user")
+        contacts_map = {c.user_id: c for c in contacts_qs}
+
+        last_message_ids = [
+            chat.last_message_id for chat in chats_qs if chat.last_message_id
+        ]
+        messages_qs = (
+            Message.objects.filter(id__in=last_message_ids)
+            .select_related("user")
+            .prefetch_related("file")
+        )
+        last_message_map = {m.chat_id: m for m in messages_qs}
+
+        ct_chat = ContentType.objects.get_for_model(Chat).id
+        ct_user = ContentType.objects.get_for_model(User).id
+        ct_contact = ContentType.objects.get_for_model(Contact).id
+        ct_profile = ContentType.objects.get_for_model(Profile).id
+
+        object_tuples = []
+        for chat in chats_qs:
+            object_tuples.append((ct_chat, chat.id))
+            if chat.is_dialog:
+                for member in getattr(chat, "other_members", []):
+                    interlocutor = member.user
+                    object_tuples.append((ct_user, interlocutor.id))
+                    profile = getattr(interlocutor, "profile", None)
+                    if profile:
+                        object_tuples.append((ct_profile, profile.id))
+                    if interlocutor.id in contacts_map:
+                        object_tuples.append(
+                            (ct_contact, contacts_map[interlocutor.id].id)
+                        )
+
+        media_map = {}
+        if object_tuples:
+            ctype_ids, object_ids = zip(*object_tuples)
+            media_qs = DisplayMedia.objects.filter(
+                is_primary=True, content_type_id__in=ctype_ids, object_id__in=object_ids
+            ).select_related("displayphoto", "displayvideo")
+            media_map = {(dm.content_type_id, dm.object_id): dm for dm in media_qs}
+
+        unread_map = dict(
+            MessageRecipient.objects.filter(
+                user=user, is_deleted=False, read_date__isnull=True
+            )
+            .exclude(message__user=user)
+            .values("message__chat_id")
+            .annotate(cnt=Count("id"))
+            .values_list("message__chat_id", "cnt")
+        )
+
+        for chat in chats_qs:
+            chat.last_message = last_message_map.get(chat.id)
+            chat.unread_count = unread_map.get(chat.id, 0)
+
+        serializer = ChatListSerializer(
+            chats_qs,
+            many=True,
+            context={
+                "request": request,
+                "media_map": media_map,
+                "contacts_map": contacts_map,
+                "ct_contact_id": ct_contact,
+                "ct_profile_id": ct_profile,
+                "ct_chat_id": ct_chat,
+                "interlocutors_map": {
+                    chat.id: (
+                        chat.other_members[0].user if chat.other_members else None
+                    )
+                    for chat in chats_qs
+                    if chat.is_dialog
+                },
+            },
+        )
+
+        # print("--- SQL Queries ---")
+        # for q in connection.queries:
+        #     print(q["sql"])
+
+        return Response({"chats": serializer.data}, status=200)
+
+
+class GetChat(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, chat_id):
+        try:
+            chat = Chat.objects.get(id=chat_id)
+            serializer = ChatSerializer(chat, context={"request": request})
+            return Response({"chat": serializer.data}, status=200)
+        except Chat.DoesNotExist:
+            return Response({"error": "Chat not found"}, status=404)
+
+
+class GetMessagesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        chat_id = kwargs.get("chat")
+        cursor_id = request.GET.get("cursor_id")
+        page_size = int(request.GET.get("page_size", 50))
+
+        try:
+            chat = Chat.objects.get(id=chat_id, users=request.user)
+            recipients_prefetch = Prefetch(
+                "recipients",
+                queryset=MessageRecipient.objects.select_related("user").filter(
+                    read_date__isnull=False
+                ),
+                to_attr="read_recipients",
+            )
+
+            messages_qs = (
+                chat.messages.filter(is_deleted=False)
+                .select_related("user", "user__profile", "reply_to")
+                .prefetch_related("file", recipients_prefetch)
+                .order_by("-date")
+            )
+            if cursor_id:
+                messages_qs = messages_qs.filter(id__lt=cursor_id)
+
+            messages = list(messages_qs[:page_size])
+            messages.reverse()
+
+            serializer = MessageSerializer(
+                messages, many=True, context={"request": request}
+            )
+
+            next_cursor = messages[-1].id if messages else None
+            return Response(
+                {
+                    "messages": serializer.data,
+                    "next_cursor": next_cursor,
+                }
+            )
+
+        except Chat.DoesNotExist:
+            return Response({"error": "Chat not found"}, status=404)
 
 
 class MessageReactionView(APIView):
@@ -103,11 +241,6 @@ class MessageReactionView(APIView):
             )
 
 
-protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
-
-from apps.media_files.models.models import File
-
-
 class ProtectedFileView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -139,47 +272,6 @@ class ProtectedFileView(APIView):
             as_attachment=False,
             filename=os.path.basename(file_path),
         )
-
-
-class GetMessagesAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, *args, **kwargs):
-        chat_id = kwargs.get("chat")
-        cursor_id = request.GET.get("cursor_id")
-        page_size = int(request.GET.get("page_size", 50))
-
-        try:
-            chat = Chat.objects.get(id=chat_id, users=request.user)
-            messages_qs = (
-                chat.messages.filter(
-                    is_deleted=False,
-                    recipients__user=request.user,
-                    recipients__is_deleted=False,
-                )
-                .select_related("user", "user__profile", "reply_to")
-                .prefetch_related("file")
-            )
-
-            if cursor_id:
-                messages_qs = messages_qs.filter(id__lt=cursor_id)
-
-            messages = list(messages_qs.order_by("-date")[:page_size])
-
-            messages.reverse()
-
-            serializer = MessageSerializer(
-                messages, many=True, context={"request": request}
-            )
-            return Response(
-                {
-                    "messages": serializer.data,
-                    "next_cursor": messages[0].id if messages else None,
-                }
-            )
-
-        except Chat.DoesNotExist:
-            return Response({"error": "Chat not found"}, status=404)
 
 
 class MessageViewSet(viewsets.ViewSet):
@@ -242,7 +334,6 @@ class MessageViewSet(viewsets.ViewSet):
                         filename = protected_storage.save(
                             uploaded_file.name, uploaded_file
                         )
-                        from mimetypes import guess_type
 
                         mime_type, _ = guess_type(uploaded_file.name)
                         if mime_type and mime_type.startswith("image/"):
@@ -252,8 +343,6 @@ class MessageViewSet(viewsets.ViewSet):
                         # elif mime_type and mime_type.startswith('audio/'):
                         #     new_file = AudioFile.objects.create(file=filename)
                         else:
-                            from apps.media_files.models.models import File
-
                             new_file = File.objects.create(file=filename)
 
                         new_message.file.add(new_file)
@@ -344,9 +433,40 @@ def get_general_info(request):
     try:
         logger.info(f"Getting general info for user: {request.user.id}")
 
-        serializer = UserSerializer(request.user, context={"request": request})
+        user = (
+            CustomUser.objects.select_related("profile")
+            .prefetch_related(
+                Prefetch(
+                    "profile__profile_media",
+                    queryset=DisplayPhoto.objects.all(),
+                    to_attr="prefetched_photos",
+                ),
+                Prefetch(
+                    "profile__profile_media",
+                    queryset=DisplayVideo.objects.all(),
+                    to_attr="prefetched_videos",
+                ),
+            )
+            .filter(pk=request.user.pk)
+            .first()
+        )
 
-        return Response({"success": True, "user": serializer.data})
+        active_wallpaper = None
+        if hasattr(request.user, "profile") and request.user.profile.active_wallpaper:
+            active_wallpaper = WallpaperSerializer(
+                request.user.profile.active_wallpaper, context={"request": request}
+            ).data
+
+        serializer = UserSerializer(user, context={"request": request})
+
+        return Response(
+            {
+                "success": True,
+                "user": serializer.data,
+                "active_wallpaper": active_wallpaper,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     except Exception as e:
         logger.error(
@@ -467,3 +587,66 @@ def protected_file(request, filename):
         raise Http404("File not found")
 
     return FileResponse(open(filepath, "rb"))
+
+
+class UserWallpapersAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user_wallpapers = Wallpaper.objects.filter(
+            userwallpaper__user=request.user
+        ).distinct()
+
+        serializer = WallpaperSerializer(
+            user_wallpapers, many=True, context={"request": request}
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = WallpaperSerializer(
+            data=request.data, context={"request": request}
+        )
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                wallpaper = serializer.save()
+                UserWallpaper.objects.create(user=request.user, wallpaper=wallpaper)
+
+            try:
+                channel_layer = get_channel_layer()
+                user_id = request.user.id
+
+                file_url = wallpaper.file.url if wallpaper.file else None
+                if file_url:
+                    file_url = request.build_absolute_uri(file_url)
+
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{user_id}",
+                    {
+                        "type": "user_wallpaper_added",
+                        "data": {
+                            "id": wallpaper.id,
+                            "file_url": file_url,
+                            "type": "photo",
+                        },
+                    },
+                )
+            except Exception as e:
+                print(f"Channels error: {e}")
+
+            return Response(
+                {
+                    "id": wallpaper.id,
+                    "file_url": file_url,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            return Response(
+                {"detail": "Internal server error", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

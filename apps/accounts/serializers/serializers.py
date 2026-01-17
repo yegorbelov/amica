@@ -64,7 +64,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 class ActiveSessionSerializer(serializers.ModelSerializer):
     device = serializers.SerializerMethodField()
-    is_active = serializers.SerializerMethodField()
     is_current = serializers.SerializerMethodField()
 
     class Meta:
@@ -76,13 +75,9 @@ class ActiveSessionSerializer(serializers.ModelSerializer):
             "created_at",
             "expires_at",
             "last_active",
-            "is_active",
             "is_current",
             "device",
         )
-
-    def get_is_active(self, obj) -> bool:
-        return obj.is_active()
 
     def get_is_current(self, obj) -> bool:
         request = self.context.get("request")

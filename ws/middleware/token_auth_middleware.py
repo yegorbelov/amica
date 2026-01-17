@@ -51,7 +51,7 @@ class TokenAuthMiddleware(BaseMiddleware):
             user_id = token["user_id"]
             jti = token["jti"]
 
-            user = User.objects.filter(id=user_id, is_active=True).first()
+            user = User.objects.filter(id=user_id).first()
             if not user:
                 return None
 

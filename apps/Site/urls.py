@@ -1,31 +1,29 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from . import views
+from .views import *
 
 router = DefaultRouter()
-router.register(r"messages", views.MessageViewSet, basename="messages")
+router.register(r"messages", MessageViewSet, basename="messages")
 
 urlpatterns = [
-    path("get_chats/", views.GetChats.as_view(), name="get_chats"),
+    path("get_chats/", GetChats.as_view(), name="get_chats"),
+    path("get_chat/<int:chat_id>/", GetChat.as_view(), name="get_chat"),
     path(
         "get_messages/<int:chat>/",
-        views.GetMessagesAPIView.as_view(),
+        GetMessagesAPIView.as_view(),
         name="get_messages",
     ),
-    path("get_general_info/", views.get_general_info, name="get_general_info"),
-    path("get_contacts/", views.GetContacts, name="get_contacts"),
-    path(
-        "users/search/", views.UserEmailSearchView.as_view(), name="user-email-search"
-    ),
-    path(
-        "files/<int:file_id>/", views.ProtectedFileView.as_view(), name="protected-file"
-    ),
+    path("get_general_info/", get_general_info, name="get_general_info"),
+    path("get_contacts/", GetContacts, name="get_contacts"),
+    path("users/search/", UserEmailSearchView.as_view(), name="user-email-search"),
+    path("files/<int:file_id>/", ProtectedFileView.as_view(), name="protected-file"),
     path(
         "protected-file/<int:file_id>/<str:version>/",
-        views.ProtectedFileView.as_view(),
+        ProtectedFileView.as_view(),
         name="protected-file",
     ),
+    path("wallpapers/", UserWallpapersAPIView.as_view(), name="wallpaper-list"),
 ]
 
 urlpatterns += router.urls

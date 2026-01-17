@@ -3,12 +3,35 @@ set -e
 
 export DJANGO_SETTINGS_MODULE=amica.settings
 
+host=${POSTGRES_HOST:-postgres}
+user=${POSTGRES_USER:-devuser}
+password=${POSTGRES_PASSWORD:-devpass}
+dbname=${POSTGRES_DB:-devdb}
+
+echo "DB=$dbname USER=$user HOST=$host"
+
+echo "Waiting for Postgres to be ready..."
+until PGPASSWORD="$password" psql -h "$host" -U "$user" -d "$dbname" -c '\q' >/dev/null 2>&1; do
+  echo "Postgres is unavailable - sleeping"
+  sleep 2
+done
+
+DB_EXISTS=$(PGPASSWORD="$password" psql -h "$host" -U "$user" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$dbname'")
+if [ "$DB_EXISTS" != "1" ]; then
+  echo "Database $dbname does not exist. Creating..."
+  PGPASSWORD="$password" psql -h "$host" -U "$user" -d postgres -c "CREATE DATABASE \"$dbname\";"
+fi
+
+
+echo "Database $dbname is ready"
+
+echo "Running Django migrations..."
 python manage.py makemigrations --noinput
 python manage.py migrate --noinput
 
-python manage.py shell -c "from django.contrib.auth import get_user_model; User = get_user_model(); \
-User.objects.filter(email='admin@gmail.com').exists() or User.objects.create_superuser(email='admin@gmail.com', password='admin')"
-
+echo "Collecting static files..."
 python manage.py collectstatic --no-input
 
-exec daphne amica.asgi:application -b 0.0.0.0 -p 8000
+echo "Starting Daphne server..."
+# exec daphne amica.asgi:application -b 0.0.0.0 -p 8000
+exec python manage.py runserver 0.0.0.0:8000

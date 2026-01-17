@@ -1,10 +1,6 @@
-from datetime import datetime
-
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericRelation
-from django.db import models
-from django.db.models import Count
-from django.dispatch import receiver
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -48,10 +44,6 @@ class Chat(models.Model):
     def is_channel(self):
         return self.chat_type == self.ChatType.CHANNEL
 
-    @property
-    def is_multi_user(self):
-        return self.chat_type in {self.ChatType.GROUP, self.ChatType.CHANNEL}
-
     def get_interlocutor(self, current_user):
         if not self.is_dialog:
             return None
@@ -62,6 +54,7 @@ class Chat(models.Model):
 
     @classmethod
     def get_or_create_direct_chat(cls, user1, user2):
+
         chat = (
             cls.objects.filter(chat_type=cls.ChatType.DIALOG)
             .filter(users=user1)
@@ -72,14 +65,21 @@ class Chat(models.Model):
         if chat:
             return chat, False
 
-        chat = cls.objects.create(chat_type=cls.ChatType.DIALOG)
-        ChatMember.objects.bulk_create(
-            [
-                ChatMember(chat=chat, user=user1, role=ChatMember.Role.MEMBER),
-                ChatMember(chat=chat, user=user2, role=ChatMember.Role.MEMBER),
-            ]
-        )
-        return chat, True
+        try:
+            with transaction.atomic():
+                chat = cls.objects.create(chat_type=cls.ChatType.DIALOG)
+                ChatMember.objects.update_or_create(chat=chat, user=user1)
+                ChatMember.objects.update_or_create(chat=chat, user=user2)
+            return chat, True
+        except IntegrityError:
+            chat = (
+                cls.objects.filter(chat_type=cls.ChatType.DIALOG)
+                .filter(users=user1)
+                .filter(users=user2)
+                .distinct()
+                .first()
+            )
+            return chat, False
 
 
 class ChatMember(models.Model):
@@ -90,7 +90,7 @@ class ChatMember(models.Model):
         SUBSCRIBER = "subscriber"
 
     chat = models.ForeignKey("Chat", on_delete=models.CASCADE)
-    user = models.ForeignKey("accounts.CustomUser", on_delete=models.CASCADE, null=True)
+    user = models.ForeignKey("accounts.CustomUser", on_delete=models.CASCADE)
 
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.MEMBER)
 
@@ -99,8 +99,43 @@ class ChatMember(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["chat", "user"], name="unique_chat_member")
+            models.UniqueConstraint(fields=["chat", "user"], name="unique_chat_member"),
         ]
+        indexes = [
+            models.Index(fields=["user", "chat"], name="user_chat_idx"),
+        ]
+
+
+class Wallpaper(models.Model):
+    file = models.FileField(upload_to="wallpapers/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Wallpaper {self.id} - {self.file.name}"
+
+
+class ChatWallpaper(models.Model):
+    chat = models.OneToOneField(
+        "Chat", on_delete=models.CASCADE, related_name="shared_wallpaper"
+    )
+    file = models.ForeignKey("media_files.File", on_delete=models.PROTECT)
+
+
+class ChatMemberWallpaper(models.Model):
+    member = models.OneToOneField(
+        "ChatMember", on_delete=models.CASCADE, related_name="wallpaper"
+    )
+    file = models.ForeignKey("media_files.File", on_delete=models.PROTECT)
+
+
+class UserWallpaper(models.Model):
+    user = models.ForeignKey(
+        "accounts.CustomUser", on_delete=models.CASCADE, related_name="wallpapers"
+    )
+    wallpaper = models.ForeignKey(Wallpaper, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.wallpaper.id}"
 
 
 class Contact(models.Model):
@@ -125,6 +160,9 @@ class Contact(models.Model):
             models.UniqueConstraint(
                 fields=["owner", "user"], name="unique_contact_per_owner"
             )
+        ]
+        indexes = [
+            models.Index(fields=["owner"], name="contact_owner_idx"),
         ]
 
     def __str__(self):
@@ -164,7 +202,7 @@ class MessageReaction(models.Model):
 
 class Message(models.Model):
     value = models.TextField(max_length=10000, null=True)
-    date = models.DateTimeField(default=datetime.now, blank=True)
+    date = models.DateTimeField(default=timezone.now, blank=True)
     user = models.ForeignKey(
         "accounts.CustomUser",
         blank=True,
@@ -201,32 +239,17 @@ class Message(models.Model):
     edit_date = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["-date"]
+        indexes = [
+            models.Index(fields=["chat", "-date", "id"]),
+            models.Index(fields=["user", "-date"]),
+            models.Index(
+                fields=["chat", "is_deleted", "-date"], name="msg_chat_isdel_date_idx"
+            ),
+        ]
 
     @property
     def reactions(self):
         return self.message_reactions.all()
-
-    @property
-    def reaction_summary(self):
-
-        return dict(
-            self.message_reactions.values("reaction_type")
-            .annotate(count=Count("id"))
-            .values_list("reaction_type", "count")
-        )
-
-    @property
-    def total_reactions(self):
-        return self.message_reactions.count()
-
-    @property
-    def view_count(self):
-        return (
-            self.recipients.filter(read_date__isnull=False)
-            .exclude(user=self.user)
-            .count()
-        )
 
     def is_viewed_by_user(self, user):
         return self.recipients.filter(user=user, read_date__isnull=False).exists()
@@ -292,6 +315,9 @@ class MessageRecipient(models.Model):
         indexes = [
             models.Index(fields=["user", "read_date", "is_deleted"]),
             models.Index(fields=["message", "user"]),
+            models.Index(fields=["user", "is_deleted", "message"]),
+            models.Index(fields=["user", "is_deleted", "read_date"]),
+            models.Index(fields=["user", "is_deleted", "read_date", "message"]),
         ]
         ordering = ["-created_date", "-pk"]
 

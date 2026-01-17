@@ -2,17 +2,21 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-COPY requirements.txt ./
-
 RUN apt-get update && \
-    apt-get install -y build-essential python3-dev && \
-    pip install --no-cache-dir -r requirements.txt && \
-    apt-get remove -y build-essential python3-dev && apt-get autoremove -y
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        python3-dev \
+        libpq-dev \
+        postgresql-client \
+        && rm -rf /var/lib/apt/lists/*
 
-COPY . .
-RUN python manage.py makemigrations && python manage.py migrate
+COPY requirements.txt /app/
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.txt
+
+COPY . /app/
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-CMD ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

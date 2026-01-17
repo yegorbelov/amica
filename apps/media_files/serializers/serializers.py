@@ -15,10 +15,9 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             "type",
             "small",
             "medium",
-            "is_active",
             "is_primary",
             "created_at",
-            "updated_at",
+            # "updated_at",
         ]
 
     def get_small(self, obj):
@@ -48,7 +47,6 @@ class DisplayVideoSerializer(serializers.ModelSerializer):
             "type",
             "url",
             "duration",
-            "is_active",
             "is_primary",
             "created_at",
             "updated_at",
@@ -64,10 +62,54 @@ class DisplayVideoSerializer(serializers.ModelSerializer):
         return "video"
 
 
+class DisplayMediaSerializer(serializers.Serializer):
+    def to_representation(self, instance):
+        instance = instance.concrete()
+
+        if isinstance(instance, DisplayPhoto):
+            return DisplayPhotoSerializer(instance, context=self.context).data
+
+        if isinstance(instance, DisplayVideo):
+            return DisplayVideoSerializer(instance, context=self.context).data
+
+        return {}
+
+
+class DisplayPhotoChatListSerializer(DisplayPhotoSerializer):
+    class Meta(DisplayPhotoSerializer.Meta):
+        fields = [
+            "id",
+            "type",
+            "small",
+            "medium",
+        ]
+
+
+class DisplayVideoChatListSerializer(DisplayVideoSerializer):
+    class Meta(DisplayVideoSerializer.Meta):
+        fields = [
+            "id",
+            "type",
+            "url",
+        ]
+
+
+class DisplayMediaChatListSerializer(DisplayMediaSerializer):
+    def to_representation(self, instance):
+        instance = instance.concrete()
+
+        if isinstance(instance, DisplayPhoto):
+            return DisplayPhotoChatListSerializer(instance, context=self.context).data
+
+        if isinstance(instance, DisplayVideo):
+            return DisplayVideoChatListSerializer(instance, context=self.context).data
+
+        return {}
+
+
 class DisplayMediaCreateSerializer(serializers.Serializer):
     file = serializers.FileField()
     is_primary = serializers.BooleanField(default=False, write_only=True)
-    is_active = serializers.BooleanField(default=True)
 
     def create(self, validated_data):
         obj = self.context["object"]
@@ -93,19 +135,6 @@ class DisplayMediaCreateSerializer(serializers.Serializer):
         return media
 
 
-class DisplayMediaSerializer(serializers.Serializer):
-    def to_representation(self, instance):
-        instance = instance.concrete()
-
-        if isinstance(instance, DisplayPhoto):
-            return DisplayPhotoSerializer(instance, context=self.context).data
-
-        if isinstance(instance, DisplayVideo):
-            return DisplayVideoSerializer(instance, context=self.context).data
-
-        return {}
-
-
 class FileSerializer(serializers.ModelSerializer):
     file_url = serializers.SerializerMethodField()
 
@@ -120,7 +149,6 @@ class FileSerializer(serializers.ModelSerializer):
             "file_size",
             "uploaded_at",
         ]
-        read_only_fields = fields
 
     def get_file_url(self, obj):
         request = self.context.get("request")

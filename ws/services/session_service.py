@@ -6,24 +6,15 @@ from asgiref.sync import sync_to_async
 
 from apps.accounts.services.sessions import update_user_session_lifetime
 
-from ..exceptions import \
-    WSValidationError  # если будешь использовать свои ошибки
+from ..exceptions import WSValidationError
 from ..repositories.session_repository import SessionRepository
 
 logger = logging.getLogger(__name__)
 
 
 class SessionService:
-    """
-    Сервис для работы с сессиями в контексте WebSocket.
-    Все методы асинхронные, чтобы не блокировать event loop.
-    """
-
     @staticmethod
     async def is_active(jti: Optional[str]) -> bool:
-        """
-        Проверяет, активна ли сессия по JTI.
-        """
         if not jti:
             return False
 
@@ -37,20 +28,6 @@ class SessionService:
     async def update_lifetime(
         user, days: int, refresh_token: Optional[str] = None
     ) -> bool:
-        """
-        Обновляет срок жизни сессии пользователя.
-
-        Args:
-            user: Django User instance
-            days: Количество дней (должно быть положительным целым)
-            refresh_token: Текущий refresh token (для безопасности)
-
-        Returns:
-            bool: True если успешно, False если ошибка
-
-        Raises:
-            WSValidationError: Если входные данные некорректны
-        """
         if not user.is_authenticated:
             logger.warning(f"Attempt to update session lifetime for anonymous user")
             raise WSValidationError("User is not authenticated")
@@ -63,7 +40,6 @@ class SessionService:
             raise WSValidationError("Refresh token is required")
 
         try:
-            # Вызываем синхронную функцию из accounts через sync_to_async
             result = await sync_to_async(update_user_session_lifetime)(
                 user, days, current_refresh_token=refresh_token
             )

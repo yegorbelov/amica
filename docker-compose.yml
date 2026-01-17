@@ -1,55 +1,118 @@
-version: '3.8'
-
 services:
-  # web:
-  #   build: .
-  #   container_name: django_app
-  #   ports:
-  #     - '8000:8000'
-  #   environment:
-  #     - REDIS_URL=redis://redis:6379
-  #   depends_on:
-  #     - redis
+  amica:
+    build: .
+    container_name: django_app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    # command: watchfiles "amica.asgi:application" "--host" "0.0.0.0" "--port" "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:alpine
     container_name: redis
     ports:
-      - '6379:6379'
+      - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: devdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser -d devdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile.celery
-    tmpfs:
-      - /tmp:size=1g
+    restart: always
     volumes:
       - .:/app
       - ./media:/app/media
+      - ./protected_files:/app/protected_files
+      - ./tmp:/app/tmp
+    env_file:
+      - .env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgres://devuser:devpass@postgres:5432/devdb
     command: celery -A amica worker --loglevel=info
     depends_on:
-      - redis
-  
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   celery-beat:
     build:
       context: .
       dockerfile: Dockerfile.celery
-    tmpfs:
-      - /tmp:size=1g
+    restart: always
+    env_file:
+      - .env
     volumes:
       - .:/app
       - ./media:/app/media
+      - ./protected_files:/app/protected_files
+      - ./tmp:/app/tmp
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    command: celery -A amica beat --loglevel=info
+      - DATABASE_URL=postgres://devuser:devpass@postgres:5432/devdb
+    command: celery -A amica beat --scheduler=celery.beat.PersistentScheduler --loglevel=info
     depends_on:
-      - redis
-  
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  postgres-backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: devuser
+      PGPASSWORD: devpass
+      PGDATABASE: devdb
+    volumes:
+      - ./backups:/backups
+    command: >
+      sh -c "
+        apk add --no-cache busybox-extras &&
+        echo '0 2 * * * pg_dump -h $$PGHOST -U $$PGUSER $$PGDATABASE | gzip > /backups/backup-$$(date +%%Y%%m%%d_%%H%%M).sql.gz' > /etc/crontabs/root &&
+        echo '0 3 * * * find /backups -name \"backup-*.sql.gz\" -mtime +7 -delete' >> /etc/crontabs/root &&
+        crond -f -l 2
+      "
+
 volumes:
   redis_data:
+  postgres_data:

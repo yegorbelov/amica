@@ -29,13 +29,9 @@ class BearerJWTAuthentication(JWTAuthentication):
                     raise AuthenticationFailed("Session revoked")
 
                 now = timezone.now()
-                if session.expires_at <= now or session.last_active <= now - timedelta(
-                    minutes=30
-                ):
-                    raise AuthenticationFailed("Session revoked")
 
-                session.last_active = now
-                session.save(update_fields=["last_active"])
+                if now - session.last_active > timedelta(seconds=10):
+                    ActiveSession.objects.filter(pk=session.pk).update(last_active=now)
 
             except TokenError:
                 raise AuthenticationFailed("Invalid refresh token")

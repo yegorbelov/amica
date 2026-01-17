@@ -74,20 +74,24 @@ class DisplayMedia(models.Model):
     object_id = models.PositiveIntegerField(null=True)
     content_object = GenericForeignKey("content_type", "object_id")
 
-    is_active = models.BooleanField(default=True)
     is_primary = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        abstract = False
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["content_type", "object_id", "is_primary", "created_at"],
+                name="dm_primary_created",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
 
-        super().save(*args, **kwargs)  # <-- сначала сохраняем
+        super().save(*args, **kwargs)
 
         if is_new:
             ensure_primary_if_needed(self)
@@ -177,6 +181,10 @@ class File(PolymorphicModel):
 
     class Meta:
         ordering = ["-uploaded_at"]
+        indexes = [
+            models.Index(fields=["uploaded_at"]),
+            models.Index(fields=["category", "uploaded_at"]),
+        ]
 
     def save(self, *args, **kwargs):
         if self.file:

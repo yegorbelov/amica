@@ -48,11 +48,6 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return self.display_name
 
-    class Meta:
-        indexes = [
-            models.Index(fields=["username"]),
-        ]
-
 
 User = get_user_model()
 
@@ -73,6 +68,14 @@ class Profile(models.Model):
         "media_files.DisplayMedia", related_query_name="profile"
     )
 
+    active_wallpaper = models.ForeignKey(
+        "Site.Wallpaper",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="profiles_using",
+    )
+
     def update_last_seen(self):
         self.last_seen = timezone.now()
         self.save(update_fields=["last_seen"])
@@ -80,14 +83,16 @@ class Profile(models.Model):
     def __str__(self):
         return f"Profile of {self.user.email}"
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["last_seen"]),
+        ]
+
 
 @receiver(post_save, sender=CustomUser)
 def manage_user_profile(sender, instance, created, **kwargs):
     profile, _ = Profile.objects.get_or_create(user=instance)
     profile.save()
-
-
-from datetime import timedelta
 
 
 class ActiveSession(models.Model):
@@ -110,14 +115,8 @@ class ActiveSession(models.Model):
         ]
         ordering = ["-created_at"]
 
-    def is_active(self):
-        now = timezone.now()
-        return self.expires_at > now and (
-            self.last_active > now - timedelta(minutes=30)
-        )
-
     def revoke(self):
         self.delete()
 
     def __str__(self):
-        return f"Session(user={self.user_id}, active={self.is_active()})"
+        return f"Session(user={self.user_id}, active={self.last_active})"

@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 
+os.environ.setdefault("DJANGO_CELERY_BEAT_TZ_AWARE", "False")
+os.environ["TZ"] = "UTC"
+
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,7 +22,6 @@ WEBAUTHN_PORT = env("WEBAUTHN_PORT")
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "static"]
 
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
@@ -46,7 +48,6 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
-    "debug_toolbar",
     "sslserver",
     "apps.Site",
     "apps.accounts",
@@ -56,12 +57,13 @@ INSTALLED_APPS = [
     "webauthn",
     "django_celery_beat",
     "django_celery_results",
+    "silk",
 ]
-
 
 SITE_ID = 1
 
 MIDDLEWARE = [
+    "silk.middleware.SilkyMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -70,7 +72,6 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "debug_toolbar.middleware.DebugToolbarMiddleware",
 ]
 
 
@@ -133,10 +134,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 LANGUAGE_CODE = "en-us"
-
-TIME_ZONE = "Europe/Moscow"
-USE_I18N = True
-USE_L10N = False
+TIME_ZONE = "UTC"
 USE_TZ = True
 
 
@@ -149,7 +147,7 @@ ASGI_APPLICATION = "amica.asgi.application"
 WSGI_APPLICATION = "amica.wsgi.application"
 
 
-REDIS_HOST = "localhost"
+REDIS_HOST = "redis"
 REDIS_PORT = 6379
 
 CHANNEL_LAYERS = {
@@ -160,8 +158,8 @@ CHANNEL_LAYERS = {
         },
     },
 }
-CELERY_BROKER_URL = "redis://127.0.0.1:6379/0"
-CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/0"
+CELERY_BROKER_URL = "redis://redis:6379/0"
+CELERY_RESULT_BACKEND = "redis://redis:6379/0"
 
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
@@ -195,26 +193,18 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 ALLOWED_HOSTS = ["*"]
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'postgres',
-#         'USER': 'postgres',
-#         'PASSWORD': 'postgres',
-#         'HOST': 'localhost',
-#         'PORT': '5432',
-#     }
-# }
-
 SESSION_CACHE_ALIAS = "default"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "devdb",
+        "USER": "devuser",
+        "PASSWORD": "devpass",
+        "HOST": "postgres",
+        "PORT": "5432",
     }
 }
-
 
 DEFAULT_FILE_STORAGE = (
     "django_hashedfilenamestorage.storage.HashedFilenameFileSystemStorage"
@@ -266,14 +256,20 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_SAMESITE": "Lax",
 }
 
-
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-# EMAIL_HOST = "smtp.gmail.com"
-# EMAIL_PORT = 587
-# EMAIL_USE_TLS = True
-# EMAIL_HOST_USER = "your_email@gmail.com"
-# EMAIL_HOST_PASSWORD = "your_email_password"
-# DEFAULT_FROM_EMAIL = "Your App <your_email@gmail.com>"
-
 PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
+
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
+
+import re
+
+
+class SilkIgnoreProtectedFiles:
+    def __contains__(self, path: str) -> bool:
+        if re.match(r"^/api/protected-file/\d+/[a-zA-Z0-9_-]+/?", path):
+            return True
+        if path.startswith("/media/"):
+            return True
+        return False
+
+
+SILKY_IGNORE_PATHS = SilkIgnoreProtectedFiles()
