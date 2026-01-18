@@ -33,5 +33,5 @@ echo "Collecting static files..."
 python manage.py collectstatic --no-input
 
 echo "Starting Daphne server..."
-# exec daphne amica.asgi:application -b 0.0.0.0 -p 8000
-exec python manage.py runserver 0.0.0.0:8000
+exec daphne amica.asgi:application -b 0.0.0.0 -p 8000
+# exec python manage.py runserver 0.0.0.0:8000
