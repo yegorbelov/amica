@@ -26,10 +26,7 @@ fi
 echo "Database $dbname is ready"
 
 echo "Running Django migrations..."
-python manage.py makemigrations accounts --merge --noinput || true
-python manage.py migrate accounts --noinput
-
-python manage.py makemigrations --merge --noinput || true
+python manage.py makemigrations --noinput
 python manage.py migrate --noinput
 
 echo "Collecting static files..."
