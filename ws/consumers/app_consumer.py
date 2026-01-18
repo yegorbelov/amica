@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_BROADCASTS = 50
 
-
 class AppConsumer(BaseConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
