@@ -34,4 +34,6 @@ server.crt
 server.key
 
 # Migrations
-*/migrations/
+**/migrations/
+
+backups/
