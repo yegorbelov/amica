@@ -1,14 +1,37 @@
-# db.sqlite3
-.idea
-venv
-media
-protected_files
-db.json
+# Django / Python
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
+*.pyd
 *.swp
 *.swo
+
+# Virtual environments
+venv/
+env/
+
+# IDE / Editor
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Database
+db.sqlite3
+db.json
+
+# Media / uploaded files
+media/
+protected_files/
+
+# Logs
 *.log
+
+# macOS
+.DS_Store
+
+# SSL / Certificates
 server.crt
 server.key
+
+# Migrations
+*/migrations/
