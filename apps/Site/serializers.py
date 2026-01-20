@@ -587,14 +587,14 @@ def build_absolute_url(path: str) -> str:
 
 
 class WallpaperSerializer(serializers.ModelSerializer):
-    file = serializers.ImageField(write_only=True)
-    file_url = serializers.SerializerMethodField()
+    file = serializers.FileField(write_only=True)
+    url = serializers.SerializerMethodField()
 
     class Meta:
         model = Wallpaper
-        fields = ["id", "file", "file_url", "created_at"]
+        fields = ["id", "file", "url", "created_at"]
 
-    def get_file_url(self, obj):
+    def get_url(self, obj):
         request = self.context.get("request")
         if request:
             return request.build_absolute_uri(obj.file.url)

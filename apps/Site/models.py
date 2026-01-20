@@ -106,12 +106,33 @@ class ChatMember(models.Model):
         ]
 
 
+from django.db import models
+import os
+
 class Wallpaper(models.Model):
+    FILE_TYPES = (
+        ('photo', 'Photo'),
+        ('video', 'Video'),
+    )
+
     file = models.FileField(upload_to="wallpapers/")
+    type = models.CharField(max_length=10, choices=FILE_TYPES, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.type:
+            ext = os.path.splitext(self.file.name)[1].lower()
+            if ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+                self.type = 'photo'
+            elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
+                self.type = 'video'
+            else:
+                self.type = 'photo'
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"Wallpaper {self.id} - {self.file.name}"
+        return f"Wallpaper {self.id} - {self.file.name} ({self.type})"
+
 
 
 class ChatWallpaper(models.Model):
