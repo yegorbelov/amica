@@ -185,7 +185,12 @@ CELERY_BEAT_SCHEDULE = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
+
 AUTH_USER_MODEL = "accounts.CustomUser"
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -256,7 +261,6 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_SAMESITE": "Lax",
 }
 
-PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
 
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
 
