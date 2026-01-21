@@ -3,11 +3,12 @@ from rest_framework import serializers
 
 from apps.accounts.models.models import CustomUser, Profile
 from apps.accounts.serializers.serializers import UserSerializer
-from apps.media_files.models import ImageFile, VideoFile
+from apps.media_files.models import ImageFile, VideoFile, AudioFile
 from apps.media_files.serializers.serializers import (
     FileSerializer,
     ImageFileSerializer,
     VideoFileSerializer,
+    AudioFileSerializer,
 )
 
 from .models import *
@@ -65,6 +66,8 @@ class MessageSerializer(serializers.ModelSerializer):
                 serializer = ImageFileSerializer(f, context={"request": request})
             elif isinstance(f, VideoFile):
                 serializer = VideoFileSerializer(f, context={"request": request})
+            elif isinstance(f, AudioFile):
+                serializer = AudioFileSerializer(f, context={"request": request})
             else:
                 serializer = FileSerializer(f, context={"request": request})
 

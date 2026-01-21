@@ -229,3 +229,16 @@ class VideoFileSerializer(FileSerializer):
 
     # def get_duration(self, obj):
     #     return getattr(obj, 'duration', None)
+    
+class AudioFileSerializer(FileSerializer):
+    duration = serializers.SerializerMethodField()
+    waveform = serializers.SerializerMethodField()
+
+    class Meta(FileSerializer.Meta):
+        fields = FileSerializer.Meta.fields + ["duration"] + ["waveform"]
+
+    def get_duration(self, obj):
+        return getattr(obj, 'duration', None)
+    
+    def get_waveform(self, obj):
+        return getattr(obj, 'waveform', None)

@@ -25,6 +25,9 @@ django-celery-results==2.6.0
 pillow==12.1.0
 django-imagekit==6.0.0
 django-polymorphic==4.1.0
+pydub==0.25.1
+numpy==2.4.1
+audioop-lts==0.2.2
 
 # Development tools
 django-environ==0.12.0
@@ -35,4 +38,4 @@ django-silk==5.4.3
 webauthn==2.7.0
 django-webauthn==0.0.2
 watchfiles==1.1.1
-black==25.12.0
+black==26.1.0

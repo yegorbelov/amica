@@ -336,3 +336,17 @@ class VideoFile(File):
                 super().save(update_fields=["width", "height"])
             except Exception as e:
                 logger.error(f"Video processing failed for {self.file.name}: {e}")
+
+
+from ..tasks.audio_waveform import process_audio_task
+
+class AudioFile(File):
+    duration = models.FloatField(null=True, blank=True)
+    waveform = models.JSONField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        created = self.pk is None
+        super().save(*args, **kwargs)
+
+        if self.file and created:
+            process_audio_task.delay(self.id)

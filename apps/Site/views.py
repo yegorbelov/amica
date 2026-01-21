@@ -340,8 +340,9 @@ class MessageViewSet(viewsets.ViewSet):
                             new_file = ImageFile.objects.create(file=filename)
                         elif mime_type and mime_type.startswith("video/"):
                             new_file = VideoFile.objects.create(file=filename)
-                        # elif mime_type and mime_type.startswith('audio/'):
-                        #     new_file = AudioFile.objects.create(file=filename)
+                        elif mime_type and mime_type.startswith('audio/'):
+                            from apps.media_files.models import AudioFile
+                            new_file = AudioFile.objects.create(file=filename)
                         else:
                             new_file = File.objects.create(file=filename)
 
