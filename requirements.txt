@@ -144,6 +144,8 @@ msgpack==1.1.2
     # via
     #   autobahn
     #   channels-redis
+mutagen==1.47.0
+    # via -r requirements.in
 mypy-extensions==1.1.0
     # via black
 numpy==2.4.1

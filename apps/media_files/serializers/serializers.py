@@ -17,23 +17,28 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             "medium",
             "is_primary",
             "created_at",
-            # "updated_at",
         ]
 
     def get_small(self, obj):
-        return self._build_url(obj.image_thumbnail_small)
+        return self._build_url(getattr(obj, "image_thumbnail_small", None))
 
     def get_medium(self, obj):
-        return self._build_url(obj.image_thumbnail_medium)
+        return self._build_url(getattr(obj, "image_thumbnail_medium", None))
 
     def get_type(self, obj):
         return "photo"
 
     def _build_url(self, field):
-        if not field:
+        if field is None or not getattr(field, "name", None):
             return None
+
+        try:
+            url = field.url
+        except Exception:
+            return None
+
         request = self.context.get("request")
-        return request.build_absolute_uri(field.url) if request else field.url
+        return request.build_absolute_uri(url) if request else url
 
 
 class DisplayVideoSerializer(serializers.ModelSerializer):
@@ -53,10 +58,17 @@ class DisplayVideoSerializer(serializers.ModelSerializer):
         ]
 
     def get_url(self, obj):
-        if not obj.video:
+        video = getattr(obj, "video", None)
+        if not video or not getattr(video, "name", None):
             return None
+
+        try:
+            url = video.url
+        except Exception:
+            return None
+
         request = self.context.get("request")
-        return request.build_absolute_uri(obj.video.url) if request else obj.video.url
+        return request.build_absolute_uri(url) if request else url
 
     def get_type(self, obj):
         return "video"
@@ -230,15 +242,28 @@ class VideoFileSerializer(FileSerializer):
     # def get_duration(self, obj):
     #     return getattr(obj, 'duration', None)
     
+from django.urls import reverse
+
 class AudioFileSerializer(FileSerializer):
     duration = serializers.SerializerMethodField()
     waveform = serializers.SerializerMethodField()
+    cover_url = serializers.SerializerMethodField()
 
     class Meta(FileSerializer.Meta):
-        fields = FileSerializer.Meta.fields + ["duration"] + ["waveform"]
+        fields = FileSerializer.Meta.fields + ["duration", "waveform", "cover_url"]
 
     def get_duration(self, obj):
         return getattr(obj, 'duration', None)
     
     def get_waveform(self, obj):
         return getattr(obj, 'waveform', None)
+    
+    def get_cover_url(self, obj):
+        if not obj.cover:
+            return None
+
+        url = reverse("protected-file", args=[obj.id, "cover"])
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url

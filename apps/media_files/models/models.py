@@ -343,10 +343,28 @@ from ..tasks.audio_waveform import process_audio_task
 class AudioFile(File):
     duration = models.FloatField(null=True, blank=True)
     waveform = models.JSONField(null=True, blank=True)
+    cover = models.ImageField(
+        max_length=255,
+        blank=True,
+        null=True,
+        upload_to="thumbnails/cover/",
+        storage=protected_storage,
+    )
 
-    def save(self, *args, **kwargs):
-        created = self.pk is None
-        super().save(*args, **kwargs)
 
-        if self.file and created:
-            process_audio_task.delay(self.id)
+from django.dispatch import receiver
+from django.db.models.signals import post_save, pre_save
+
+@receiver(post_save, sender=AudioFile)
+def process_audiofile(sender, instance, created, **kwargs):
+    file_changed = False
+
+    if created:
+        file_changed = True
+    else:
+        old = sender.objects.filter(pk=instance.pk).values("file").first()
+        if old and old["file"] != instance.file.name:
+            file_changed = True
+
+    if file_changed and instance.file:
+        process_audio_task.delay(instance.id)

@@ -598,7 +598,17 @@ class WallpaperSerializer(serializers.ModelSerializer):
         fields = ["id", "file", "url", "created_at"]
 
     def get_url(self, obj):
+        file = getattr(obj, "file", None)
+        if not file or not getattr(file, "name", None):
+            return None
+
+        try:
+            url = file.url
+        except Exception:
+            return None
+
         request = self.context.get("request")
         if request:
-            return request.build_absolute_uri(obj.file.url)
-        return build_absolute_url(obj.file.url)
+            return request.build_absolute_uri(url)
+
+        return url

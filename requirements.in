@@ -28,6 +28,7 @@ django-polymorphic==4.1.0
 pydub==0.25.1
 numpy==2.4.1
 audioop-lts==0.2.2
+mutagen==1.47.0
 
 # Development tools
 django-environ==0.12.0

@@ -253,16 +253,18 @@ class ProtectedFileView(APIView):
         if not file_obj.messages.filter(chat__users=request.user).exists():
             return Response({"detail": "Forbidden"}, status=403)
 
-        if isinstance(file_obj, ImageFile) and version in [
-            "thumbnail_small",
-            "thumbnail_medium",
-        ]:
+        if isinstance(file_obj, ImageFile) and version in ["thumbnail_small", "thumbnail_medium"]:
             file_field = getattr(file_obj, version)
             if not file_field:
                 raise Http404("Thumbnail not found")
             file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name)
+        elif isinstance(file_obj, AudioFile) and version == "cover":
+            if not file_obj.cover:
+                raise Http404("Cover not found")
+            file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name)
         else:
             file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.file.name)
+        
 
         if not os.path.exists(file_path):
             raise Http404("File not found")
@@ -431,11 +433,12 @@ class MessageViewSet(viewsets.ViewSet):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_general_info(request):
-    try:
-        logger.info(f"Getting general info for user: {request.user.id}")
+    logger.info("Getting general info", extra={"user_id": request.user.id})
 
+    try:
         user = (
-            CustomUser.objects.select_related("profile")
+            CustomUser.objects
+            .select_related("profile")
             .prefetch_related(
                 Prefetch(
                     "profile__profile_media",
@@ -452,10 +455,20 @@ def get_general_info(request):
             .first()
         )
 
+        if not user:
+            logger.warning("User not found", extra={"user_id": request.user.id})
+            return Response(
+                {"success": False, "error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         active_wallpaper = None
-        if hasattr(request.user, "profile") and request.user.profile.active_wallpaper:
+        profile = getattr(user, "profile", None)
+
+        if profile and profile.active_wallpaper:
             active_wallpaper = WallpaperSerializer(
-                request.user.profile.active_wallpaper, context={"request": request}
+                profile.active_wallpaper,
+                context={"request": request},
             ).data
 
         serializer = UserSerializer(user, context={"request": request})
@@ -469,17 +482,19 @@ def get_general_info(request):
             status=status.HTTP_200_OK,
         )
 
-    except Exception as e:
-        logger.error(
-            f"Error in get_general_info for user {request.user.id}: {str(e)}",
-            exc_info=True,
+    except Exception:
+        logger.exception(
+            "Error in get_general_info",
+            extra={"user_id": request.user.id},
         )
 
         return Response(
-            {"success": False, "error": "Internal server error", "details": str(e)},
+            {
+                "success": False,
+                "error": "Internal server error",
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
