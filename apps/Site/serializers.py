@@ -583,8 +583,8 @@ from urllib.parse import urljoin
 
 
 def build_absolute_url(path: str) -> str:
-    scheme = getattr(settings, "SITE_SCHEME", "http")
-    domain = getattr(settings, "SITE_DOMAIN", "localhost:8000")
+    scheme = settings.SITE_SCHEME
+    domain = settings.SITE_DOMAIN
     base = f"{scheme}://{domain}"
     return urljoin(base, path)
 
