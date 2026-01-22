@@ -595,7 +595,7 @@ class WallpaperSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Wallpaper
-        fields = ["id", "file", "url", "created_at"]
+        fields = ["id", "file", "url", "created_at", "type"]
 
     def get_url(self, obj):
         file = getattr(obj, "file", None)
@@ -611,4 +611,4 @@ class WallpaperSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(url)
 
-        return url
+        return build_absolute_url(url)

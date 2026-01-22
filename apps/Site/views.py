@@ -462,14 +462,19 @@ def get_general_info(request):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        active_wallpaper = None
         profile = getattr(user, "profile", None)
+        active_wallpaper = None
 
-        if profile and profile.active_wallpaper:
-            active_wallpaper = WallpaperSerializer(
-                profile.active_wallpaper,
-                context={"request": request},
-            ).data
+        if profile:
+            if profile.active_wallpaper:
+                active_wallpaper = WallpaperSerializer(
+                    profile.active_wallpaper,
+                    context={"request": request},
+                ).data
+            elif profile.default_wallpaper_id:
+                active_wallpaper = {"id": profile.default_wallpaper_id}
+            else:
+                active_wallpaper = {"id": "default-0"}
 
         serializer = UserSerializer(user, context={"request": request})
 
@@ -487,7 +492,6 @@ def get_general_info(request):
             "Error in get_general_info",
             extra={"user_id": request.user.id},
         )
-
         return Response(
             {
                 "success": False,
@@ -645,7 +649,7 @@ class UserWallpapersAPIView(APIView):
                         "type": "user_wallpaper_added",
                         "data": {
                             "id": wallpaper.id,
-                            "file_url": file_url,
+                            "url": file_url,
                             "type": "photo",
                         },
                     },

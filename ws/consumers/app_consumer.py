@@ -301,19 +301,38 @@ class AppConsumer(BaseConsumer):
             return await self.send_json(
                 {"type": "error", "message": "No wallpaper id provided"}
             )
-
-        wallpaper = await self.get_user_wallpaper(wallpaper_id)
-        if not wallpaper:
-            return await self.send_json(
-                {"type": "error", "message": "Wallpaper not found for user"}
-            )
-
-        await self.set_active_wallpaper_in_profile(wallpaper)
-        serialized = await self.serialize_wallpaper(wallpaper)
-
+    
+        profile = await database_sync_to_async(lambda: self.user.profile)()
+    
+        if str(wallpaper_id).startswith("default-"):
+            def save_default():
+                profile.active_wallpaper = None
+                profile.default_wallpaper_id = wallpaper_id
+                profile.save(update_fields=["active_wallpaper", "default_wallpaper_id"])
+                return {
+                    "id": wallpaper_id,
+                }
+    
+            serialized = await database_sync_to_async(save_default)()
+        else:
+            wallpaper = await self.get_user_wallpaper(wallpaper_id)
+            if not wallpaper:
+                return await self.send_json(
+                    {"type": "error", "message": "Wallpaper not found for user"}
+                )
+    
+            def save_user_wallpaper():
+                profile.active_wallpaper = wallpaper
+                profile.default_wallpaper_id = None
+                profile.save(update_fields=["active_wallpaper", "default_wallpaper_id"])
+                return wallpaper
+    
+            wallpaper = await database_sync_to_async(save_user_wallpaper)()
+            serialized = await self.serialize_wallpaper(wallpaper)
+    
         channel_layer = get_channel_layer()
         group_name = f"user_{self.user.id}"
-
+    
         await channel_layer.group_send(
             group_name,
             {

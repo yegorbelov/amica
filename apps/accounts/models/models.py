@@ -67,6 +67,10 @@ class Profile(models.Model):
     profile_media = GenericRelation(
         "media_files.DisplayMedia", related_query_name="profile"
     )
+    
+    default_wallpaper_id = models.CharField(
+        max_length=50, blank=True, null=True
+    )
 
     active_wallpaper = models.ForeignKey(
         "Site.Wallpaper",
@@ -75,6 +79,14 @@ class Profile(models.Model):
         blank=True,
         related_name="profiles_using",
     )
+    
+    def get_current_wallpaper_id(self):
+        if self.active_wallpaper:
+            return str(self.active_wallpaper.id)
+        elif self.default_wallpaper_id:
+            return self.default_wallpaper_id
+        else:
+            return "default-0"
 
     def update_last_seen(self):
         self.last_seen = timezone.now()
