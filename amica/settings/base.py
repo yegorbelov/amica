@@ -6,13 +6,12 @@ os.environ["TZ"] = "UTC"
 
 import environ
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
 SECRET_KEY = env("SECRET_KEY")
-DEBUG = env.bool("DEBUG", default=False)
 GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID")
 
 WEBAUTHN_RP_ID = env("WEBAUTHN_RP_ID")
@@ -268,7 +267,6 @@ SIMPLE_JWT = {
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
 
 import re
-
 
 class SilkIgnoreProtectedFiles:
     def __contains__(self, path: str) -> bool:

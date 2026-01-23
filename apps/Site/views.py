@@ -650,7 +650,7 @@ class UserWallpapersAPIView(APIView):
                         "data": {
                             "id": wallpaper.id,
                             "url": file_url,
-                            "type": "photo",
+                            "type": wallpaper.type,
                         },
                     },
                 )

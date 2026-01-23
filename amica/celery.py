@@ -2,7 +2,7 @@ import os
 
 from celery import Celery
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "amica.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "amica.settings.dev")
 
 app = Celery("amica")
 

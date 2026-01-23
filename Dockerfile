@@ -1,4 +1,3 @@
-# Dockerfile (для Django)
 FROM python:3.14-slim AS base
 
 WORKDIR /app
@@ -13,7 +12,6 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Второй stage
 FROM base
 
 COPY . /app/

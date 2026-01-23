@@ -6,7 +6,8 @@ import sys
 
 def main():
     """Run administrative tasks."""
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "amica.settings")
+    django_settings = os.environ.get("DJANGO_SETTINGS_MODULE", "amica.settings.base")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", django_settings)
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

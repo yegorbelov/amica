@@ -42,3 +42,5 @@ backups/
 *.egg-info/
 dist/
 build/
+
+celerybeat-schedule*
