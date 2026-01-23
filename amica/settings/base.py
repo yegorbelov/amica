@@ -29,7 +29,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 SESSION_COOKIE_AGE = 1209600
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
-# SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 
@@ -65,7 +65,6 @@ INSTALLED_APPS = [
 SITE_ID = 1
 
 MIDDLEWARE = [
-    "silk.middleware.SilkyMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -75,6 +74,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
 
 
 CSP_DEFAULT_SRC = ("'self'",)
@@ -116,8 +116,6 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
-
-# Password validation
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -266,17 +264,3 @@ SIMPLE_JWT = {
 
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
 
-import re
-
-class SilkIgnoreProtectedFiles:
-    def __contains__(self, path: str) -> bool:
-        if re.match(r"^/api/protected-file/\d+/[a-zA-Z0-9_-]+/?", path):
-            return True
-        if re.match(r"^/api/files/\d+(/|/[a-zA-Z0-9_-]+/?)$", path):
-            return True
-        if path.startswith("/media/"):
-            return True
-        return False
-
-
-SILKY_IGNORE_PATHS = SilkIgnoreProtectedFiles()
