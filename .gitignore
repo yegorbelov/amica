@@ -37,3 +37,8 @@ server.key
 # **/migrations/
 
 backups/
+
+# Python packaging
+*.egg-info/
+dist/
+build/

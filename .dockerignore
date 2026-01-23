@@ -38,3 +38,12 @@ Thumbs.db
 # === Docker ===
 *.env
 docker-compose.override.yml
+
+# === Temp / cache ===
+tmp/
+.cache/
+pytest_cache/
+.mypy_cache/
+ruff_cache/
+coverage/
+htmlcov/
