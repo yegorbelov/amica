@@ -114,6 +114,18 @@ services:
         crond -f -l 2
       "
 
+  django-nginx:
+    image: nginx:alpine
+    container_name: django_nginx
+    ports:
+      - '8080:80'
+    volumes:
+      - ./media:/usr/share/nginx/media
+      - ./protected_files:/usr/share/nginx/protected_files
+      - ./django.conf:/etc/nginx/conf.d/django.conf
+    depends_on:
+      - amica
+
 volumes:
   redis_data:
   postgres_data:
