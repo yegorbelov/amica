@@ -33,4 +33,11 @@ if [ "$1" = "python" ] && [ "$2" = "manage.py" ]; then
   python manage.py collectstatic --no-input
 fi
 
+mkdir -p /app/media
+
+chmod 755 /app/media
+
+umask 002
+
+
 exec "$@"
