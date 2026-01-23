@@ -2,6 +2,11 @@ from .base import *
 
 DEBUG = True
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
+
 MIDDLEWARE.insert(0, "silk.middleware.SilkyMiddleware")
 
 import re
