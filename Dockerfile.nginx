@@ -3,7 +3,7 @@ FROM nginx:alpine
 COPY django.conf /etc/nginx/conf.d/django.conf
 
 COPY media /usr/share/nginx/media
-COPY protected_files /usr/share/nginx/protected_files
+# COPY protected_files /usr/share/nginx/protected_files
 
 EXPOSE 80
 
