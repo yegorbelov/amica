@@ -182,7 +182,10 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
+PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
 
 AUTH_USER_MODEL = "accounts.CustomUser"
 
