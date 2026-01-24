@@ -128,6 +128,13 @@ class Wallpaper(models.Model):
                 self.type = 'video'
             else:
                 self.type = 'photo'
+                
+            if self.file:
+                filename = self.file.name
+                if len(filename) > 64:
+                    name, ext = os.path.splitext(filename)
+                    self.file.name = name[:64] + ext
+                    
         super().save(*args, **kwargs)
 
     def __str__(self):
