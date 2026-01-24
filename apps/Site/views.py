@@ -154,8 +154,28 @@ class GetChat(APIView):
 
     def get(self, request, chat_id):
         try:
-            chat = Chat.objects.get(id=chat_id)
+            chat = (
+                Chat.objects
+                .prefetch_related(
+                    "users",
+                    "display_media",
+                    "users__profile",
+                    "users__profile__profile_media",
+                    Prefetch(
+                        "messages",
+                        queryset=Message.objects
+                            .select_related("user")
+                            .prefetch_related(
+                                "file",
+                            )
+                            .order_by("date")
+                    ),
+                )
+                .get(id=chat_id)
+            )
+            
             serializer = ChatSerializer(chat, context={"request": request})
+
             return Response({"chat": serializer.data}, status=200)
         except Chat.DoesNotExist:
             return Response({"error": "Chat not found"}, status=404)

@@ -110,14 +110,10 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_is_own(self, obj):
         request = self.context.get("request")
-        if request and hasattr(request, "user"):
-            return obj.user.id == request.user.id
-
-        user_id = self.context.get("user_id")
-        if user_id:
-            return obj.user.id == user_id
-
+        if request and request.user.is_authenticated:
+            return obj.user_id == request.user.id
         return False
+
 
     def get_reply_to_message(self, obj):
         if obj.reply_to and not obj.reply_to.is_deleted:
