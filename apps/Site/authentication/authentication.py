@@ -8,32 +8,35 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from apps.accounts.models import ActiveSession
 
 
+from rest_framework_simplejwt.tokens import AccessToken, TokenError
+
 class BearerJWTAuthentication(JWTAuthentication):
     def authenticate(self, request):
         result = super().authenticate(request)
-        if not result:
-            return None
+        if result:
+            user, token = result
+        else:
+            access_token_str = request.COOKIES.get("access_token")
+            if not access_token_str:
+                return None
+            try:
+                validated_token = AccessToken(access_token_str)
+                user = self.get_user(validated_token)
+                token = validated_token
+            except TokenError:
+                raise AuthenticationFailed("Invalid access token in cookie")
 
-        user, token = result
         refresh_token_str = request.COOKIES.get("refresh_token")
-
         if refresh_token_str:
             try:
                 jti = RefreshToken(refresh_token_str).payload.get("jti")
-                if not jti:
-                    raise AuthenticationFailed("Invalid refresh token")
-
-                try:
+                if jti:
                     session = ActiveSession.objects.get(user=user, jti=jti)
-                except ActiveSession.DoesNotExist:
-                    raise AuthenticationFailed("Session revoked")
+                    now = timezone.now()
+                    if now - session.last_active > timedelta(seconds=10):
+                        ActiveSession.objects.filter(pk=session.pk).update(last_active=now)
+            except (TokenError, ActiveSession.DoesNotExist):
+                pass
 
-                now = timezone.now()
+        return (user, token)
 
-                if now - session.last_active > timedelta(seconds=10):
-                    ActiveSession.objects.filter(pk=session.pk).update(last_active=now)
-
-            except TokenError:
-                raise AuthenticationFailed("Invalid refresh token")
-
-        return result

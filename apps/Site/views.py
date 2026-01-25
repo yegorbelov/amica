@@ -262,6 +262,9 @@ class MessageReactionView(APIView):
 from django.http import StreamingHttpResponse, Http404
 import re
 
+import logging
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 
 class ProtectedFileView(APIView):
     permission_classes = [IsAuthenticated]
@@ -275,7 +278,6 @@ class ProtectedFileView(APIView):
         if not file_obj.messages.filter(chat__users=request.user).exists():
             return Response({"detail": "Forbidden"}, status=403)
 
-        # Определяем путь и content_type
         if isinstance(file_obj, ImageFile) and version in ["thumbnail_small", "thumbnail_medium"]:
             file_field = getattr(file_obj, version)
             if not file_field:
@@ -301,7 +303,6 @@ class ProtectedFileView(APIView):
 
         file_size = os.path.getsize(file_path)
 
-        # Чтение Range
         range_header = request.headers.get("Range", "").strip()
         range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
 
@@ -335,6 +336,9 @@ class ProtectedFileView(APIView):
         )
         response["Content-Length"] = str(length)
         response["Accept-Ranges"] = "bytes"
+        response["Cache-Control"] = "no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        
         if range_match:
             response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 

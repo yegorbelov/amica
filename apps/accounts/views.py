@@ -99,6 +99,8 @@ def set_refresh_cookie(response, refresh: RefreshToken):
     return response
 
 
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def refresh_token(request):
@@ -130,6 +132,19 @@ def create_refresh_token_for_user(user):
     token.set_exp(from_time=timezone.now(), lifetime=timedelta(days=lifetime_days))
     return token
 
+def set_access_cookie(response, access):
+    lifetime_seconds = access["exp"] - int(datetime.now(tz=dt_timezone.utc).timestamp())
+    response.set_cookie(
+        "access_token",
+        str(access),
+        httponly=True,
+        secure=False,
+        samesite="Lax",
+        max_age=lifetime_seconds,
+        path="/",
+    )
+    return response
+
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -141,17 +156,20 @@ def api_login(request):
         return Response({"error": "Invalid credentials"}, status=400)
 
     refresh = create_refresh_token_for_user(user)
-    access = str(refresh.access_token)
+    access = refresh.access_token
 
     remember_session(user, refresh, request)
 
     response = Response(
         {
-            "access": access,
+            "access": str(access),
             "user": UserSerializer(user, context={"request": request}).data,
         }
     )
-    return set_refresh_cookie(response, refresh)
+    response = set_refresh_cookie(response, refresh)
+    response = set_access_cookie(response, access)
+
+    return response
 
 
 @api_view(["POST"])
@@ -172,9 +190,12 @@ def google_login(request):
     refresh = RefreshToken.for_user(user)
     remember_session(user, refresh, request)
     serializer = UserSerializer(user, context={"request": request})
+    
+    access = refresh.access_token
 
-    response = Response({"access": str(refresh.access_token), "user": serializer.data})
+    response = Response({"access": str(access), "user": serializer.data})
     response = set_refresh_cookie(response, refresh)
+    response = set_access_cookie(response, access)
 
     return response
 
@@ -186,6 +207,7 @@ def logout(request):
         ActiveSession.objects.filter(jti=str(RefreshToken(refresh)["jti"])).delete()
     response = Response(status=204)
     response.delete_cookie("refresh_token")
+    response.delete_cookie("access_token")
     return response
 
 
@@ -226,6 +248,7 @@ def signup(request):
     )
 
     response = set_refresh_cookie(response, refresh)
+    response = set_access_cookie(response, refresh.access_token)
 
     return response
 
@@ -325,6 +348,7 @@ def passkey_register_finish(request):
             {"success": True, "message": "Passkey registered", **serializer.data}
         )
         response = set_refresh_cookie(response, refresh)
+        response = set_access_cookie(response, refresh.access_token)
 
         del request.session["passkey_challenge"]
         del request.session["passkey_user_email"]
@@ -418,6 +442,7 @@ def passkey_auth_finish(request):
         remember_session(user, refresh, request)
         response = Response({"success": True, "message": "Passkey login successful!"})
         response = set_refresh_cookie(response, refresh)
+        response = set_access_cookie(response, refresh.access_token)
 
         del request.session["passkey_challenge"]
         return response
