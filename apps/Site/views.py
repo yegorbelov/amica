@@ -259,6 +259,8 @@ class MessageReactionView(APIView):
                 {"error": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+from django.http import StreamingHttpResponse, Http404
+import re
 
 
 class ProtectedFileView(APIView):
@@ -273,27 +275,70 @@ class ProtectedFileView(APIView):
         if not file_obj.messages.filter(chat__users=request.user).exists():
             return Response({"detail": "Forbidden"}, status=403)
 
+        # Определяем путь и content_type
         if isinstance(file_obj, ImageFile) and version in ["thumbnail_small", "thumbnail_medium"]:
             file_field = getattr(file_obj, version)
             if not file_field:
                 raise Http404("Thumbnail not found")
             file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name)
+            content_type = "image/jpeg"
         elif isinstance(file_obj, AudioFile) and version == "cover":
             if not file_obj.cover:
                 raise Http404("Cover not found")
             file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name)
+            content_type = "image/jpeg"
         else:
             file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.file.name)
-        
+            if isinstance(file_obj, AudioFile):
+                content_type = "audio/mpeg"
+            elif isinstance(file_obj, VideoFile):
+                content_type = "video/mp4"
+            else:
+                content_type = "application/octet-stream"
 
         if not os.path.exists(file_path):
             raise Http404("File not found")
 
-        return FileResponse(
-            open(file_path, "rb"),
-            as_attachment=False,
-            filename=os.path.basename(file_path),
+        file_size = os.path.getsize(file_path)
+
+        # Чтение Range
+        range_header = request.headers.get("Range", "").strip()
+        range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+
+        start = 0
+        end = file_size - 1
+
+        if range_match:
+            start = int(range_match.group(1))
+            if range_match.group(2):
+                end = int(range_match.group(2))
+
+        length = end - start + 1
+        chunk_size = 1024 * 512
+
+        def file_iterator(path, offset=0, length=None, chunk_size=chunk_size):
+            with open(path, "rb") as f:
+                f.seek(offset)
+                remaining = length
+                while remaining > 0:
+                    read_size = min(chunk_size, remaining)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        response = StreamingHttpResponse(
+            file_iterator(file_path, offset=start, length=length),
+            status=206 if range_match else 200,
+            content_type=content_type,
         )
+        response["Content-Length"] = str(length)
+        response["Accept-Ranges"] = "bytes"
+        if range_match:
+            response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+
+        return response
 
 
 class MessageViewSet(viewsets.ViewSet):

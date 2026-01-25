@@ -311,10 +311,11 @@ logger = logging.getLogger(__name__)
 class VideoFile(File):
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
+    duration = models.FloatField(null=True, blank=True)
+    has_audio = models.BooleanField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-
+        # Если нужно вычислить width/height
         if self.file and (self.width is None or self.height is None):
             try:
                 file_path = self.file.storage.path(self.file.name)
@@ -333,9 +334,21 @@ class VideoFile(File):
                 output = subprocess.check_output(cmd).decode().strip()
                 w, h = map(int, output.split("x"))
                 self.width, self.height = w, h
-                super().save(update_fields=["width", "height"])
+                cmd_audio = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "csv=p=0",
+                    file_path,
+                ]
+                audio_output = subprocess.check_output(cmd_audio).decode().strip()
+                self.has_audio = bool(audio_output)
             except Exception as e:
                 logger.error(f"Video processing failed for {self.file.name}: {e}")
+
+        super().save(*args, **kwargs)
+
 
 
 from ..tasks.audio_waveform import process_audio_task

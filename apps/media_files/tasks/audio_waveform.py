@@ -16,32 +16,25 @@ def process_audio_task(audiofile_id):
     try:
         audiofile = AudioFile.objects.get(id=audiofile_id)
 
-        # Получаем файл в локальный tmp (подходит и для S3)
         with NamedTemporaryFile(delete=True) as tmp:
             for chunk in audiofile.file.chunks():
                 tmp.write(chunk)
             tmp.flush()
 
-            # duration
             audio = AudioSegment.from_file(tmp.name)
             duration = round(len(audio) / 1000, 2)
 
-            # waveform
             waveform = generate_waveform(tmp.name, samples=60)
 
-            # cover
             mutagen_audio = MutagenFile(tmp.name)
             cover_data = None
             if mutagen_audio.tags:
-                # MP3 APIC
                 apic_keys = [k for k in mutagen_audio.tags.keys() if k.startswith("APIC:")]
                 if apic_keys:
                     cover_data = mutagen_audio.tags[apic_keys[0]].data
-                # M4A cover
                 elif hasattr(mutagen_audio, "pictures") and mutagen_audio.pictures:
                     cover_data = mutagen_audio.pictures[0].data
 
-            # Сохраняем всё
             audiofile.duration = duration
             audiofile.waveform = waveform
             if cover_data:

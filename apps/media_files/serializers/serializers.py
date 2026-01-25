@@ -229,15 +229,19 @@ class VideoFileSerializer(FileSerializer):
     width = serializers.SerializerMethodField()
     height = serializers.SerializerMethodField()
     # duration = serializers.SerializerMethodField()
+    has_audio = serializers.SerializerMethodField()
 
     class Meta(FileSerializer.Meta):
-        fields = FileSerializer.Meta.fields + ["width", "height"]
+        fields = FileSerializer.Meta.fields + ["width", "height", "has_audio"]
 
     def get_width(self, obj):
         return getattr(obj, "width", None)
 
     def get_height(self, obj):
         return getattr(obj, "height", None)
+    
+    def get_has_audio(self, obj):
+        return getattr(obj, 'has_audio', None)
 
     # def get_duration(self, obj):
     #     return getattr(obj, 'duration', None)
