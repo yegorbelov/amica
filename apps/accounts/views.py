@@ -119,8 +119,9 @@ def refresh_token(request):
             session.user, new_refresh, request, old_jti=str(old_refresh["jti"])
         )
         response = Response({"access": str(new_refresh.access_token)})
-        return set_refresh_cookie(response, new_refresh)
-
+        response = set_access_cookie(response, new_refresh.access_token)
+        response = set_refresh_cookie(response, new_refresh)
+        return response
     except TokenError:
         return Response({"error": "Invalid refresh token"}, status=401)
 

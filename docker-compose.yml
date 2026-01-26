@@ -1,6 +1,7 @@
 services:
   amica:
     build: .
+    restart: always
     container_name: django_app
     ports:
       - '8000:8000'
