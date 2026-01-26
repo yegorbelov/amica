@@ -64,13 +64,16 @@ def compress_video_task(self, model_name: str, video_id: int):
             "-profile:v", "baseline",
             "-level", "3.0",
             "-preset", "medium",
-            "-crf", "23",
+            "-b:v", "2M",
+            "-maxrate", "2.5M",
+            "-bufsize", "4M",
             "-g", "25",
             "-keyint_min", "25",
             "-sc_threshold", "0",
             "-movflags", "+faststart+frag_keyframe+empty_moov+default_base_moof",
             temp_output,
         ]
+        
         
         
 
