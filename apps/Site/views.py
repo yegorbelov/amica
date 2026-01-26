@@ -336,7 +336,7 @@ class ProtectedFileView(APIView):
         )
         response["Content-Length"] = str(length)
         response["Accept-Ranges"] = "bytes"
-        response["Cache-Control"] = "no-store"
+        response["Cache-Control"] = "public, max-age=3600"
         response["X-Content-Type-Options"] = "nosniff"
         
         if range_match:
