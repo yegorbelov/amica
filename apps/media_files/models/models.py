@@ -191,10 +191,10 @@ class DisplayVideo(DisplayMedia):
 
 class File(PolymorphicModel):
     file = models.FileField(
-        max_length=255, null=True, blank=True, storage=protected_storage
+        max_length=1024, null=True, blank=True, storage=protected_storage
     )
-    name = models.CharField(max_length=255, blank=True, null=True)
-    original_name = models.CharField(max_length=255, blank=True, null=True)
+    name = models.CharField(max_length=1024, blank=True, null=True)
+    original_name = models.CharField(max_length=1024, blank=True, null=True)
     extension = models.CharField(max_length=10, blank=True, null=True)
     category = models.CharField(max_length=20, blank=True, null=True)
     file_size = models.BigIntegerField(default=0)
@@ -249,14 +249,14 @@ class File(PolymorphicModel):
 
 class ImageFile(ImageProcessingMixin, File):
     thumbnail_small = models.ImageField(
-        max_length=255,
+        max_length=1024,
         upload_to="thumbnails/small/",
         blank=True,
         null=True,
         storage=protected_storage,
     )
     thumbnail_medium = models.ImageField(
-        max_length=255,
+        max_length=1024,
         upload_to="thumbnails/medium/",
         blank=True,
         null=True,
@@ -336,7 +336,7 @@ class AudioFile(File):
     duration = models.FloatField(null=True, blank=True)
     waveform = models.JSONField(null=True, blank=True)
     cover = models.ImageField(
-        max_length=255,
+        max_length=1024,
         blank=True,
         null=True,
         upload_to="thumbnails/cover/",
