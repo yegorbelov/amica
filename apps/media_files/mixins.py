@@ -7,7 +7,7 @@ from django.core.files.base import ContentFile
 class ImageProcessingMixin(models.Model):
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
-    dominant_color = models.CharField(max_length=7, blank=True, null=True)
+    dominant_color = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         abstract = True
