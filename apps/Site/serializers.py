@@ -279,13 +279,15 @@ class MessageChatListSerializer(MessageSerializer):
     files = serializers.SerializerMethodField()
 
     def get_files(self, obj):
-        files = obj.file.all()[:3]
+        files = obj.file.all()
         serialized = []
         for f in files:
             if isinstance(f, ImageFile):
                 serialized.append(ImageFileSerializer(f, context=self.context).data)
             elif isinstance(f, VideoFile):
                 serialized.append(VideoFileSerializer(f, context=self.context).data)
+            elif isinstance(f, AudioFile):
+                serialized.append(AudioFileSerializer(f, context=self.context).data)
             else:
                 serialized.append(FileSerializer(f, context=self.context).data)
         return serialized

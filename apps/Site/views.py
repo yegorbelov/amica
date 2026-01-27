@@ -269,34 +269,55 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 class ProtectedFileView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, file_id, version=None, format=None):
-        try:
-            file_obj = File.objects.get(id=file_id)
-        except File.DoesNotExist:
-            raise Http404("File not found")
+    def get_file_path_and_type(self, file_obj, version=None):
+        if isinstance(file_obj, DisplayPhoto):
+            if version in ["thumbnail_small", "thumbnail_medium"]:
+                file_field = getattr(file_obj, version)
+                if not file_field:
+                    raise Http404("Thumbnail not found")
+                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name), "image/webp"
+            else:
+                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.image.name), "image/jpeg"
 
-        if not file_obj.messages.filter(chat__users=request.user).exists():
-            return Response({"detail": "Forbidden"}, status=403)
+        if isinstance(file_obj, DisplayVideo):
+            if version == "preview" and getattr(file_obj, "preview", None):
+                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.preview.name), "image/jpeg"
+            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.video.name), "video/mp4"
 
         if isinstance(file_obj, ImageFile) and version in ["thumbnail_small", "thumbnail_medium"]:
             file_field = getattr(file_obj, version)
             if not file_field:
                 raise Http404("Thumbnail not found")
-            file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name)
-            content_type = "image/jpeg"
+            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name), "image/webp"
         elif isinstance(file_obj, AudioFile) and version == "cover":
             if not file_obj.cover:
                 raise Http404("Cover not found")
-            file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name)
-            content_type = "image/jpeg"
+            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name), "image/jpeg"
         else:
-            file_path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.file.name)
+            path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.file.name)
             if isinstance(file_obj, AudioFile):
-                content_type = "audio/mpeg"
+                return path, "audio/mpeg"
             elif isinstance(file_obj, VideoFile):
-                content_type = "video/mp4"
-            else:
-                content_type = "application/octet-stream"
+                return path, "video/mp4"
+            return path, "application/octet-stream"
+
+    def get(self, request, file_id, version=None, format=None):
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            try:
+                file_obj = DisplayPhoto.objects.get(id=file_id)
+            except DisplayPhoto.DoesNotExist:
+                try:
+                    file_obj = DisplayVideo.objects.get(id=file_id)
+                except DisplayVideo.DoesNotExist:
+                    raise Http404("File not found")
+
+        if hasattr(file_obj, "messages"):
+            if not file_obj.messages.filter(chat__users=request.user).exists():
+                return Response({"detail": "Forbidden"}, status=403)
+
+        file_path, content_type = self.get_file_path_and_type(file_obj, version)
 
         if not os.path.exists(file_path):
             raise Http404("File not found")

@@ -18,12 +18,35 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             "is_primary",
             "created_at",
         ]
+        
+    def get_file_url(self, obj):
+            request = self.context.get("request")
+            if obj.file:
+                if request:
+                    return request.build_absolute_uri(
+                        reverse("protected-file", args=[obj.id])
+                    )
+                else:
+                    return reverse("protected-file", args=[obj.id])
+            return None
 
     def get_small(self, obj):
-        return self._build_url(getattr(obj, "image_thumbnail_small", None))
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(
+                reverse("protected-file", args=[obj.id, "thumbnail_small"])
+            )
+        else:
+            return reverse("protected-file", args=[obj.id, "thumbnail_small"])
 
     def get_medium(self, obj):
-        return self._build_url(getattr(obj, "image_thumbnail_medium", None))
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(
+                reverse("protected-file", args=[obj.id, "thumbnail_medium"])
+            )
+        else:
+            return reverse("protected-file", args=[obj.id, "thumbnail_medium"])
 
     def get_type(self, obj):
         return "photo"

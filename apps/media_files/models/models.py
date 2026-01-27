@@ -9,10 +9,15 @@ from django.core.files.base import ContentFile, File
 from django.core.validators import FileExtensionValidator
 from django.db import models, transaction
 from django.utils import timezone
+from apps.media_files.mixins import ImageProcessingMixin
 from imagekit.models import ImageSpecField
 from imagekit.processors import ResizeToFill
 from PIL import Image
 from polymorphic.models import PolymorphicModel
+from django.conf import settings
+from django.core.files.storage import FileSystemStorage
+
+protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
 
 
 def ensure_primary_if_needed(instance):
@@ -109,7 +114,7 @@ class DisplayMedia(models.Model):
         return self
 
 
-class DisplayPhoto(DisplayMedia):
+class DisplayPhoto(ImageProcessingMixin, DisplayMedia):
     image = models.ImageField(
         upload_to="media/photos/%Y/%m/%d/",
         validators=[
@@ -117,21 +122,40 @@ class DisplayPhoto(DisplayMedia):
                 allowed_extensions=["jpg", "jpeg", "png", "webp", "gif"]
             )
         ],
+        storage=protected_storage,
     )
 
-    image_thumbnail_small = ImageSpecField(
-        source="image",
-        processors=[ResizeToFill(180, 180)],
-        format="WEBP",
-        options={"quality": 60},
+    thumbnail_small = models.ImageField(
+        upload_to="display/thumbnails/180/",
+        storage=protected_storage,
+        blank=True,
+        null=True,
+    )
+    thumbnail_medium = models.ImageField(
+        upload_to="display/thumbnails/640/",
+        storage=protected_storage,
+        blank=True,
+        null=True,
     )
 
-    image_thumbnail_medium = ImageSpecField(
-        source="image",
-        processors=[ResizeToFill(640, 640)],
-        format="WEBP",
-        options={"quality": 80},
-    )
+    IMAGE_FIELD_NAME = "image"
+    THUMBNAILS = {
+        "thumbnail_small": ((180, 180), 60),
+        "thumbnail_medium": ((640, 640), 80),
+    }
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.process_image()
+        super().save(
+            update_fields=[
+                "width",
+                "height",
+                "dominant_color",
+                "thumbnail_small",
+                "thumbnail_medium",
+            ]
+        )
 
     class Meta:
         ordering = ["-created_at"]
@@ -162,10 +186,7 @@ class DisplayVideo(DisplayMedia):
         ordering = ["-created_at"]
 
 
-from django.conf import settings
-from django.core.files.storage import FileSystemStorage
 
-protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
 
 
 class File(PolymorphicModel):
@@ -226,80 +247,39 @@ class File(PolymorphicModel):
         return self.original_name or self.name or f"File {self.id}"
 
 
-class ImageFile(File):
-    width = models.PositiveIntegerField(null=True, blank=True)
-    height = models.PositiveIntegerField(null=True, blank=True)
+class ImageFile(ImageProcessingMixin, File):
     thumbnail_small = models.ImageField(
         max_length=255,
+        upload_to="thumbnails/small/",
         blank=True,
         null=True,
-        upload_to="thumbnails/small/",
         storage=protected_storage,
     )
     thumbnail_medium = models.ImageField(
         max_length=255,
+        upload_to="thumbnails/medium/",
         blank=True,
         null=True,
-        upload_to="thumbnails/medium/",
         storage=protected_storage,
     )
-    dominant_color = models.CharField(max_length=7, blank=True, null=True)
 
-    def get_average_color(self, img: Image.Image) -> str:
-        img_small = img.resize((1, 1))
-        pixel = img_small.getpixel((0, 0))
-        r, g, b = pixel[:3]
-        return f"#{r:02x}{g:02x}{b:02x}"
+    IMAGE_FIELD_NAME = "file"
+    THUMBNAILS = {
+        "thumbnail_small": ((75, 75), 50),
+        "thumbnail_medium": ((800, 800), 80),
+    }
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-        if self.file:
-            try:
-                img = Image.open(self.file)
-                self.width, self.height = img.size
-                self.dominant_color = self.get_average_color(img)
-                self.generate_thumbnails(img)
-                super().save(
-                    update_fields=[
-                        "width",
-                        "height",
-                        "dominant_color",
-                        "thumbnail_small",
-                        "thumbnail_medium",
-                    ]
-                )
-            except Exception as e:
-                print(f"Image processing failed: {e}")
-
-    def generate_thumbnails(self, img: Image.Image):
-        thumb_small = img.copy()
-        thumb_small.thumbnail((75, 75))
-        thumb_small_io = BytesIO()
-        thumb_small.save(
-            thumb_small_io,
-            format="WEBP",
-            lossless=False,
-            quality=50,
-        )
-        self.thumbnail_small.save(
-            f"small_{os.path.basename(self.file.name)}.webp",
-            ContentFile(thumb_small_io.getvalue()),
-            save=False,
-        )
-
-        thumb_medium = img.copy()
-        thumb_medium.thumbnail((800, 800))
-        thumb_medium_io = BytesIO()
-        thumb_medium.save(
-            thumb_medium_io,
-            format="WEBP",
-            lossless=False,
-            quality=80,
-        )
-        self.thumbnail_medium.save(
-            f"medium_{os.path.basename(self.file.name)}.webp",
-            ContentFile(thumb_medium_io.getvalue()),
-            save=False,
+        self.process_image()
+        super().save(
+            update_fields=[
+                "width",
+                "height",
+                "dominant_color",
+                "thumbnail_small",
+                "thumbnail_medium",
+            ]
         )
 
 
@@ -315,7 +295,6 @@ class VideoFile(File):
     has_audio = models.BooleanField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        # Если нужно вычислить width/height
         if self.file and (self.width is None or self.height is None):
             try:
                 file_path = self.file.storage.path(self.file.name)

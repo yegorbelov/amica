@@ -66,7 +66,7 @@ def compress_video_task(self, model_name: str, video_id: int):
             "-preset", "medium",
             "-b:v", "2M",
             "-maxrate", "2.5M",
-            "-bufsize", "4M",
+            "-bufsize", "3M",
             "-g", "25",
             "-keyint_min", "25",
             "-sc_threshold", "0",
