@@ -259,7 +259,7 @@ class MessageReactionView(APIView):
                 {"error": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-from django.http import StreamingHttpResponse, Http404
+from django.http import StreamingHttpResponse, Http404, HttpResponse
 import re
 
 import logging
@@ -334,7 +334,13 @@ class ProtectedFileView(APIView):
             start = int(range_match.group(1))
             if range_match.group(2):
                 end = int(range_match.group(2))
-
+        
+        if start >= file_size:
+            response = HttpResponse(status=416)
+            response["Content-Range"] = f"bytes */{file_size}"
+            return response
+        
+        end = min(end, file_size - 1)
         length = end - start + 1
         chunk_size = 1024 * 512
 
@@ -357,7 +363,7 @@ class ProtectedFileView(APIView):
         )
         response["Content-Length"] = str(length)
         response["Accept-Ranges"] = "bytes"
-        response["Cache-Control"] = "public, max-age=3600"
+        response["Cache-Control"] = "private, max-age=3600"
         response["X-Content-Type-Options"] = "nosniff"
         
         if range_match:
