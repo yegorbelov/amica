@@ -72,6 +72,7 @@ constantly==23.10.4
 cryptography==46.0.3
     # via
     #   autobahn
+    #   google-auth
     #   pyopenssl
     #   service-identity
     #   webauthn
@@ -127,6 +128,8 @@ djangorestframework==3.16.1
     #   djangorestframework-simplejwt
 djangorestframework-simplejwt==5.5.1
     # via -r requirements.in
+google-auth==2.48.0
+    # via -r requirements.in
 gprof2dot==2025.4.14
     # via django-silk
 hyperlink==21.0.0
@@ -178,9 +181,12 @@ py-ubjson==0.16.1
 pyasn1==0.6.1
     # via
     #   pyasn1-modules
+    #   rsa
     #   service-identity
 pyasn1-modules==0.4.2
-    # via service-identity
+    # via
+    #   google-auth
+    #   service-identity
 pycparser==2.23
     # via cffi
 pydub==0.25.1
@@ -205,6 +211,8 @@ redis==7.1.0
     #   channels-redis
 requests==2.32.5
     # via -r requirements.in
+rsa==4.9.1
+    # via google-auth
 service-identity==24.2.0
     # via twisted
 six==1.17.0

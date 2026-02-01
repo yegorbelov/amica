@@ -144,27 +144,36 @@ def api_login(request):
     return set_refresh_cookie(response, refresh)
 
 
+import requests
+from rest_framework.response import Response
+from rest_framework import status
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def google_login(request):
-    token = request.data.get("id_token")
-    if not token:
-        return Response(
-            {"error": "No token provided"}, status=status.HTTP_400_BAD_REQUEST
-        )
+    access_token = request.data.get("access_token")
+    if not access_token:
+        return Response({"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        GOOGLE_CLIENT_ID = settings.GOOGLE_CLIENT_ID
-        user = google_login_or_create_user(request, token, GOOGLE_CLIENT_ID)
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    print(access_token)
+    token_info = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}").json()
+    if "error" in token_info:
+        return Response({"error": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    email = token_info.get("email")
+    print(email)
+    if not email:
+        return Response({"error": "Email not found in token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = google_login_or_create_user(request, access_token)
 
     refresh = RefreshToken.for_user(user)
     remember_session(user, refresh, request)
     serializer = UserSerializer(user, context={"request": request})
-
     response = Response({"access": str(refresh.access_token), "user": serializer.data})
     response = set_refresh_cookie(response, refresh)
+    return response
+
 
     return response
 

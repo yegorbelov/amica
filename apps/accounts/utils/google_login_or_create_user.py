@@ -1,5 +1,4 @@
 from io import BytesIO
-from urllib.request import urlopen
 
 import requests
 from django.core.files.base import ContentFile
@@ -9,20 +8,32 @@ from apps.media_files.models.models import DisplayPhoto
 from ...accounts.models import CustomUser
 
 
-def google_login_or_create_user(request, id_token, client_id):
-    from google.auth.transport import requests as google_requests
-    from google.oauth2 import id_token as google_id_token
+import requests
+from io import BytesIO
+from django.core.files.base import ContentFile
 
-    data = google_id_token.verify_oauth2_token(
-        id_token, google_requests.Request(), client_id
+def google_login_or_create_user(request, access_token):
+    token_info_resp = requests.get(
+        f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}"
     )
-    if not data or "email" not in data:
-        raise ValueError("Invalid Google token")
+    token_info = token_info_resp.json()
 
-    email = data["email"]
-    first_name = data.get("given_name", "")
-    last_name = data.get("family_name", "")
-    avatar_url = data.get("picture")
+    if "error" in token_info:
+        raise ValueError("Invalid Google access token")
+
+    email = token_info.get("email")
+    if not email:
+        raise ValueError("Email not found in token")
+
+    user_info_resp = requests.get(
+        "https://www.googleapis.com/oauth2/v1/userinfo",
+        params={"access_token": access_token}
+    )
+    user_info = user_info_resp.json()
+
+    first_name = user_info.get("given_name", "")
+    last_name = user_info.get("family_name", "")
+    avatar_url = user_info.get("picture")
 
     user, created = CustomUser.objects.get_or_create(
         email=email,
@@ -52,3 +63,4 @@ def google_login_or_create_user(request, id_token, client_id):
             print("Failed to save Google avatar:", e)
 
     return user
+

@@ -78,17 +78,17 @@ MIDDLEWARE = [
 
 
 
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_SCRIPT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
-CSP_IMG_SRC = ("'self'", "data:", "blob:")
-CSP_CONNECT_SRC = ("'self'", "wss://*", "ws://*")
-CSP_OBJECT_SRC = ("'none'",)
-CSP_FRAME_ANCESTORS = ("'none'",)
-CSP_BASE_URI = ("'self'",)
-CSP_FORM_ACTION = ("'self'",)
+# CSP_DEFAULT_SRC = ("'self'",)
+# CSP_SCRIPT_SRC = ("'self'",)
+# CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
+# CSP_IMG_SRC = ("'self'", "data:", "blob:")
+# CSP_CONNECT_SRC = ("'self'", "wss://*", "ws://*")
+# CSP_OBJECT_SRC = ("'none'",)
+# CSP_FRAME_ANCESTORS = ("'none'",)
+# CSP_BASE_URI = ("'self'",)
+# CSP_FORM_ACTION = ("'self'",)
 
-CSP_SEND_DEFAULT_SRC = True
+# CSP_SEND_DEFAULT_SRC = True
 
 
 SOCIAL_AUTH_URL_NAMESPACE = "social"
