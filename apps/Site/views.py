@@ -149,6 +149,9 @@ class GetChats(APIView):
         return Response({"chats": serializer.data}, status=200)
 
 
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 class GetChat(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -165,9 +168,7 @@ class GetChat(APIView):
                         "messages",
                         queryset=Message.objects
                             .select_related("user")
-                            .prefetch_related(
-                                "file",
-                            )
+                            .prefetch_related("file")
                             .order_by("date")
                     ),
                 )
@@ -175,10 +176,31 @@ class GetChat(APIView):
             )
             
             serializer = ChatSerializer(chat, context={"request": request})
-
-            return Response({"chat": serializer.data}, status=200)
+            
+            # ✅ Добавляем CSP заголовок
+            response_data = {"chat": serializer.data}
+            response = Response(response_data, status=200)
+            response['Content-Security-Policy'] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "connect-src 'self' wss://* ws://*; "
+                "object-src 'none'; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self';"
+            )
+            
+            return response
+            
         except Chat.DoesNotExist:
-            return Response({"error": "Chat not found"}, status=404)
+            response = Response({"error": "Chat not found"}, status=404)
+            response['Content-Security-Policy'] = (
+                "default-src 'self'; script-src 'self'; object-src 'none';"
+            )
+            return response
+
 
 
 class GetMessagesAPIView(APIView):

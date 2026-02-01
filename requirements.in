@@ -2,6 +2,7 @@
 Django==6.0.1
 djangorestframework==3.16.*
 djangorestframework-simplejwt==5.5.*
+django-csp==4.0
 
 # Database
 psycopg2-binary==2.9.*
