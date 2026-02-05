@@ -19,34 +19,23 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         
-    def get_file_url(self, obj):
+    def _get_thumbnail_url(self, obj, version):
+        if getattr(obj, version, None):
             request = self.context.get("request")
-            if obj.file:
-                if request:
-                    return request.build_absolute_uri(
-                        reverse("protected-file", args=[obj.id])
-                    )
-                else:
-                    return reverse("protected-file", args=[obj.id])
-            return None
+            url = reverse("protected-file-versioned", args=[obj.id, version])
+            if request:
+                return request.build_absolute_uri(url)
+            return url
+        return None
 
+    
     def get_small(self, obj):
-        request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(
-                reverse("protected-file", args=[obj.id, "thumbnail_small"])
-            )
-        else:
-            return reverse("protected-file", args=[obj.id, "thumbnail_small"])
-
+        return self._get_thumbnail_url(obj, "thumbnail_small")
+    
+    
     def get_medium(self, obj):
-        request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(
-                reverse("protected-file", args=[obj.id, "thumbnail_medium"])
-            )
-        else:
-            return reverse("protected-file", args=[obj.id, "thumbnail_medium"])
+        return self._get_thumbnail_url(obj, "thumbnail_medium")
+    
 
     def get_type(self, obj):
         return "photo"
@@ -190,10 +179,10 @@ class FileSerializer(serializers.ModelSerializer):
         if obj.file:
             if request:
                 return request.build_absolute_uri(
-                    reverse("protected-file", args=[obj.id])
+                    reverse("protected-file-default", args=[obj.id])
                 )
             else:
-                return reverse("protected-file", args=[obj.id])
+                return reverse("protected-file-default", args=[obj.id])
         return None
 
 
@@ -216,27 +205,20 @@ class ImageFileSerializer(FileSerializer):
             "dominant_color",
         ]
 
+    def get_thumbnail_url(self, obj, version):
+        if getattr(obj, version, None):
+            request = self.context.get("request")
+            url = reverse("protected-file-versioned", args=[obj.id, version])
+            if request:
+                return request.build_absolute_uri(url)
+            return url
+        return None
+    
     def get_thumbnail_small_url(self, obj):
-        if getattr(obj, "thumbnail_small", None):
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(
-                    reverse("protected-file", args=[obj.id, "thumbnail_small"])
-                )
-            else:
-                return reverse("protected-file", args=[obj.id, "thumbnail_small"])
-        return None
-
+        return self.get_thumbnail_url(obj, "thumbnail_small")
+    
     def get_thumbnail_medium_url(self, obj):
-        if getattr(obj, "thumbnail_medium", None):
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(
-                    reverse("protected-file", args=[obj.id, "thumbnail_medium"])
-                )
-            else:
-                return reverse("protected-file", args=[obj.id, "thumbnail_medium"])
-        return None
+        return self.get_thumbnail_url(obj, "thumbnail_medium")
 
     def get_width(self, obj):
         return getattr(obj, "width", None)
@@ -289,7 +271,7 @@ class AudioFileSerializer(FileSerializer):
         if not obj.cover:
             return None
 
-        url = reverse("protected-file", args=[obj.id, "cover"])
+        url = reverse("protected-file-versioned", args=[obj.id, "cover"])
         request = self.context.get("request")
         if request:
             return request.build_absolute_uri(url)

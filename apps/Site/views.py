@@ -177,7 +177,6 @@ class GetChat(APIView):
             
             serializer = ChatSerializer(chat, context={"request": request})
             
-            # ✅ Добавляем CSP заголовок
             response_data = {"chat": serializer.data}
             response = Response(response_data, status=200)
             response['Content-Security-Policy'] = (
@@ -292,14 +291,28 @@ class ProtectedFileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_file_path_and_type(self, file_obj, version=None):
+        print("TYPE1:")
+        
         if isinstance(file_obj, DisplayPhoto):
-            if version in ["thumbnail_small", "thumbnail_medium"]:
-                file_field = getattr(file_obj, version)
+            print("TYPE4:", type(file_obj))
+            print("IS PHOTO:", isinstance(file_obj, DisplayPhoto))
+            if version in ("thumbnail_small", "thumbnail_medium"):
+                file_field = getattr(file_obj, version, None)
                 if not file_field:
                     raise Http404("Thumbnail not found")
-                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name), "image/webp"
-            else:
-                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.image.name), "image/jpeg"
+    
+                return (
+                    os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name),
+                    "image/webp",
+                )
+    
+            if not file_obj.image:
+                raise Http404("Image not found")
+    
+            return (
+                os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.image.name),
+                "image/jpeg",
+            )
 
         if isinstance(file_obj, DisplayVideo):
             if version == "preview" and getattr(file_obj, "preview", None):
