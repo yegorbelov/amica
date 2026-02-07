@@ -20,9 +20,10 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
         ]
         
     def _get_thumbnail_url(self, obj, version):
+        print("VERSION:", obj, version)
         if getattr(obj, version, None):
             request = self.context.get("request")
-            url = reverse("protected-file-versioned", args=[obj.id, version])
+            url = reverse("protected-file-versioned", args=[obj.id, "display_photo", version])
             if request:
                 return request.build_absolute_uri(url)
             return url

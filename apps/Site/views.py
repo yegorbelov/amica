@@ -336,17 +336,25 @@ class ProtectedFileView(APIView):
                 return path, "video/mp4"
             return path, "application/octet-stream"
 
-    def get(self, request, file_id, version=None, format=None):
-        try:
-            file_obj = File.objects.get(id=file_id)
-        except File.DoesNotExist:
+    def get(self, request, file_id, version=None, file_type=None, format=None):
+        print(file_id, file_type)
+        if(file_type == "display_photo"):
             try:
                 file_obj = DisplayPhoto.objects.get(id=file_id)
             except DisplayPhoto.DoesNotExist:
+                raise Http404("File not found")
+        else:
+            try:
+                file_obj = File.objects.get(id=file_id)
+            except File.DoesNotExist:
                 try:
-                    file_obj = DisplayVideo.objects.get(id=file_id)
-                except DisplayVideo.DoesNotExist:
-                    raise Http404("File not found")
+                    print("request", file_id)
+                    file_obj = DisplayPhoto.objects.get(id=file_id)
+                except DisplayPhoto.DoesNotExist:
+                    try:    
+                        file_obj = DisplayVideo.objects.get(id=file_id)
+                    except DisplayVideo.DoesNotExist:
+                        raise Http404("File not found")
 
         if hasattr(file_obj, "messages"):
             if not file_obj.messages.filter(chat__users=request.user).exists():
