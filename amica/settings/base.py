@@ -72,10 +72,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    'csp.middleware.CSPMiddleware',
+    "csp.middleware.CSPMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
-
 
 
 # CSP_DEFAULT_SRC = ("'self'",)
@@ -193,7 +192,7 @@ PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
 
 AUTH_USER_MODEL = "accounts.CustomUser"
 
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
 
@@ -231,14 +230,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://192.168.1.68:5173",
     "http://localhost:8000",
     "http://192.168.1.68:8000",
-    "https://chillin.nekotyan2d.ru",
+    "https://amica.nekotyan2d.ru",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://192.168.1.68:5173",
-    "https://chillin.nekotyan2d.ru",
+    "https://amica.nekotyan2d.ru",
 ]
 
 REST_FRAMEWORK = {
@@ -268,4 +267,3 @@ SIMPLE_JWT = {
 
 
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
-

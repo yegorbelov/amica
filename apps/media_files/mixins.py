@@ -4,6 +4,7 @@ from PIL import Image
 from django.db import models
 from django.core.files.base import ContentFile
 
+
 class ImageProcessingMixin(models.Model):
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
@@ -14,7 +15,6 @@ class ImageProcessingMixin(models.Model):
 
     IMAGE_FIELD_NAME = "image"
     THUMBNAILS = {}
-
 
     def process_image(self):
         image_field = getattr(self, self.IMAGE_FIELD_NAME)

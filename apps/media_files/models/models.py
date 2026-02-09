@@ -186,9 +186,6 @@ class DisplayVideo(DisplayMedia):
         ordering = ["-created_at"]
 
 
-
-
-
 class File(PolymorphicModel):
     file = models.FileField(
         max_length=1024, null=True, blank=True, storage=protected_storage
@@ -315,10 +312,14 @@ class VideoFile(File):
                 self.width, self.height = w, h
                 cmd_audio = [
                     "ffprobe",
-                    "-v", "error",
-                    "-select_streams", "a",
-                    "-show_entries", "stream=index",
-                    "-of", "csv=p=0",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
                     file_path,
                 ]
                 audio_output = subprocess.check_output(cmd_audio).decode().strip()
@@ -329,8 +330,8 @@ class VideoFile(File):
         super().save(*args, **kwargs)
 
 
-
 from ..tasks.audio_waveform import process_audio_task
+
 
 class AudioFile(File):
     duration = models.FloatField(null=True, blank=True)
@@ -346,6 +347,7 @@ class AudioFile(File):
 
 from django.dispatch import receiver
 from django.db.models.signals import post_save, pre_save
+
 
 @receiver(post_save, sender=AudioFile)
 def process_audiofile(sender, instance, created, **kwargs):

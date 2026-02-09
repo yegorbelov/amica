@@ -18,25 +18,24 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             "is_primary",
             "created_at",
         ]
-        
+
     def _get_thumbnail_url(self, obj, version):
         print("VERSION:", obj, version)
         if getattr(obj, version, None):
             request = self.context.get("request")
-            url = reverse("protected-file-versioned", args=[obj.id, "display_photo", version])
+            url = reverse(
+                "protected-file-versioned", args=[obj.id, "display_photo", version]
+            )
             if request:
                 return request.build_absolute_uri(url)
             return url
         return None
 
-    
     def get_small(self, obj):
         return self._get_thumbnail_url(obj, "thumbnail_small")
-    
-    
+
     def get_medium(self, obj):
         return self._get_thumbnail_url(obj, "thumbnail_medium")
-    
 
     def get_type(self, obj):
         return "photo"
@@ -214,10 +213,10 @@ class ImageFileSerializer(FileSerializer):
                 return request.build_absolute_uri(url)
             return url
         return None
-    
+
     def get_thumbnail_small_url(self, obj):
         return self.get_thumbnail_url(obj, "thumbnail_small")
-    
+
     def get_thumbnail_medium_url(self, obj):
         return self.get_thumbnail_url(obj, "thumbnail_medium")
 
@@ -245,14 +244,16 @@ class VideoFileSerializer(FileSerializer):
 
     def get_height(self, obj):
         return getattr(obj, "height", None)
-    
+
     def get_has_audio(self, obj):
-        return getattr(obj, 'has_audio', None)
+        return getattr(obj, "has_audio", None)
 
     # def get_duration(self, obj):
     #     return getattr(obj, 'duration', None)
-    
+
+
 from django.urls import reverse
+
 
 class AudioFileSerializer(FileSerializer):
     duration = serializers.SerializerMethodField()
@@ -263,11 +264,11 @@ class AudioFileSerializer(FileSerializer):
         fields = FileSerializer.Meta.fields + ["duration", "waveform", "cover_url"]
 
     def get_duration(self, obj):
-        return getattr(obj, 'duration', None)
-    
+        return getattr(obj, "duration", None)
+
     def get_waveform(self, obj):
-        return getattr(obj, 'waveform', None)
-    
+        return getattr(obj, "waveform", None)
+
     def get_cover_url(self, obj):
         if not obj.cover:
             return None

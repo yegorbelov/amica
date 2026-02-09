@@ -152,34 +152,30 @@ class GetChats(APIView):
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+
 class GetChat(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, chat_id):
         try:
-            chat = (
-                Chat.objects
-                .prefetch_related(
-                    "users",
-                    "display_media",
-                    "users__profile",
-                    "users__profile__profile_media",
-                    Prefetch(
-                        "messages",
-                        queryset=Message.objects
-                            .select_related("user")
-                            .prefetch_related("file")
-                            .order_by("date")
-                    ),
-                )
-                .get(id=chat_id)
-            )
-            
+            chat = Chat.objects.prefetch_related(
+                "users",
+                "display_media",
+                "users__profile",
+                "users__profile__profile_media",
+                Prefetch(
+                    "messages",
+                    queryset=Message.objects.select_related("user")
+                    .prefetch_related("file")
+                    .order_by("date"),
+                ),
+            ).get(id=chat_id)
+
             serializer = ChatSerializer(chat, context={"request": request})
-            
+
             response_data = {"chat": serializer.data}
             response = Response(response_data, status=200)
-            response['Content-Security-Policy'] = (
+            response["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline'; "
@@ -190,16 +186,15 @@ class GetChat(APIView):
                 "base-uri 'self'; "
                 "form-action 'self';"
             )
-            
+
             return response
-            
+
         except Chat.DoesNotExist:
             response = Response({"error": "Chat not found"}, status=404)
-            response['Content-Security-Policy'] = (
+            response["Content-Security-Policy"] = (
                 "default-src 'self'; script-src 'self'; object-src 'none';"
             )
             return response
-
 
 
 class GetMessagesAPIView(APIView):
@@ -280,6 +275,8 @@ class MessageReactionView(APIView):
                 {"error": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
 from django.http import StreamingHttpResponse, Http404, HttpResponse
 import re
 
@@ -292,7 +289,7 @@ class ProtectedFileView(APIView):
 
     def get_file_path_and_type(self, file_obj, version=None):
         print("TYPE1:")
-        
+
         if isinstance(file_obj, DisplayPhoto):
             print("TYPE4:", type(file_obj))
             print("IS PHOTO:", isinstance(file_obj, DisplayPhoto))
@@ -300,15 +297,15 @@ class ProtectedFileView(APIView):
                 file_field = getattr(file_obj, version, None)
                 if not file_field:
                     raise Http404("Thumbnail not found")
-    
+
                 return (
                     os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name),
                     "image/webp",
                 )
-    
+
             if not file_obj.image:
                 raise Http404("Image not found")
-    
+
             return (
                 os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.image.name),
                 "image/jpeg",
@@ -316,18 +313,33 @@ class ProtectedFileView(APIView):
 
         if isinstance(file_obj, DisplayVideo):
             if version == "preview" and getattr(file_obj, "preview", None):
-                return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.preview.name), "image/jpeg"
-            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.video.name), "video/mp4"
+                return (
+                    os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.preview.name),
+                    "image/jpeg",
+                )
+            return (
+                os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.video.name),
+                "video/mp4",
+            )
 
-        if isinstance(file_obj, ImageFile) and version in ["thumbnail_small", "thumbnail_medium"]:
+        if isinstance(file_obj, ImageFile) and version in [
+            "thumbnail_small",
+            "thumbnail_medium",
+        ]:
             file_field = getattr(file_obj, version)
             if not file_field:
                 raise Http404("Thumbnail not found")
-            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name), "image/webp"
+            return (
+                os.path.join(settings.PROTECTED_MEDIA_ROOT, file_field.name),
+                "image/webp",
+            )
         elif isinstance(file_obj, AudioFile) and version == "cover":
             if not file_obj.cover:
                 raise Http404("Cover not found")
-            return os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name), "image/jpeg"
+            return (
+                os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.cover.name),
+                "image/jpeg",
+            )
         else:
             path = os.path.join(settings.PROTECTED_MEDIA_ROOT, file_obj.file.name)
             if isinstance(file_obj, AudioFile):
@@ -338,7 +350,7 @@ class ProtectedFileView(APIView):
 
     def get(self, request, file_id, version=None, file_type=None, format=None):
         print(file_id, file_type)
-        if(file_type == "display_photo"):
+        if file_type == "display_photo":
             try:
                 file_obj = DisplayPhoto.objects.get(id=file_id)
             except DisplayPhoto.DoesNotExist:
@@ -351,7 +363,7 @@ class ProtectedFileView(APIView):
                     print("request", file_id)
                     file_obj = DisplayPhoto.objects.get(id=file_id)
                 except DisplayPhoto.DoesNotExist:
-                    try:    
+                    try:
                         file_obj = DisplayVideo.objects.get(id=file_id)
                     except DisplayVideo.DoesNotExist:
                         raise Http404("File not found")
@@ -377,12 +389,12 @@ class ProtectedFileView(APIView):
             start = int(range_match.group(1))
             if range_match.group(2):
                 end = int(range_match.group(2))
-        
+
         if start >= file_size:
             response = HttpResponse(status=416)
             response["Content-Range"] = f"bytes */{file_size}"
             return response
-        
+
         end = min(end, file_size - 1)
         length = end - start + 1
         chunk_size = 1024 * 512
@@ -408,7 +420,7 @@ class ProtectedFileView(APIView):
         response["Accept-Ranges"] = "bytes"
         response["Cache-Control"] = "private, max-age=3600"
         response["X-Content-Type-Options"] = "nosniff"
-        
+
         if range_match:
             response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
@@ -481,8 +493,9 @@ class MessageViewSet(viewsets.ViewSet):
                             new_file = ImageFile.objects.create(file=filename)
                         elif mime_type and mime_type.startswith("video/"):
                             new_file = VideoFile.objects.create(file=filename)
-                        elif mime_type and mime_type.startswith('audio/'):
+                        elif mime_type and mime_type.startswith("audio/"):
                             from apps.media_files.models import AudioFile
+
                             new_file = AudioFile.objects.create(file=filename)
                         else:
                             new_file = File.objects.create(file=filename)
@@ -576,8 +589,7 @@ def get_general_info(request):
 
     try:
         user = (
-            CustomUser.objects
-            .select_related("profile")
+            CustomUser.objects.select_related("profile")
             .prefetch_related(
                 Prefetch(
                     "profile__profile_media",
@@ -638,6 +650,7 @@ def get_general_info(request):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])

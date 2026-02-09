@@ -109,10 +109,11 @@ class ChatMember(models.Model):
 from django.db import models
 import os
 
+
 class Wallpaper(models.Model):
     FILE_TYPES = (
-        ('photo', 'Photo'),
-        ('video', 'Video'),
+        ("photo", "Photo"),
+        ("video", "Video"),
     )
 
     file = models.FileField(upload_to="wallpapers/")
@@ -122,24 +123,23 @@ class Wallpaper(models.Model):
     def save(self, *args, **kwargs):
         if not self.type:
             ext = os.path.splitext(self.file.name)[1].lower()
-            if ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-                self.type = 'photo'
-            elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-                self.type = 'video'
+            if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
+                self.type = "photo"
+            elif ext in [".mp4", ".avi", ".mov", ".mkv", ".webm"]:
+                self.type = "video"
             else:
-                self.type = 'photo'
-                
+                self.type = "photo"
+
             if self.file:
                 filename = self.file.name
                 if len(filename) > 64:
                     name, ext = os.path.splitext(filename)
                     self.file.name = name[:64] + ext
-                    
+
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Wallpaper {self.id} - {self.file.name} ({self.type})"
-
 
 
 class ChatWallpaper(models.Model):

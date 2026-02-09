@@ -7,6 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class BearerJWTAuthentication(JWTAuthentication):
     SESSION_UPDATE_INTERVAL = timedelta(seconds=10)
 
@@ -33,7 +34,9 @@ class BearerJWTAuthentication(JWTAuthentication):
                     session, _ = ActiveSession.objects.get_or_create(user=user, jti=jti)
                     now = timezone.now()
                     if now - session.last_active > self.SESSION_UPDATE_INTERVAL:
-                        ActiveSession.objects.filter(pk=session.pk).update(last_active=now)
+                        ActiveSession.objects.filter(pk=session.pk).update(
+                            last_active=now
+                        )
             except TokenError:
                 pass
 

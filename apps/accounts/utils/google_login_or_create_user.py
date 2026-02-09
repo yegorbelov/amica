@@ -12,6 +12,7 @@ import requests
 from io import BytesIO
 from django.core.files.base import ContentFile
 
+
 def google_login_or_create_user(request, access_token):
     token_info_resp = requests.get(
         f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}"
@@ -27,7 +28,7 @@ def google_login_or_create_user(request, access_token):
 
     user_info_resp = requests.get(
         "https://www.googleapis.com/oauth2/v1/userinfo",
-        params={"access_token": access_token}
+        params={"access_token": access_token},
     )
     user_info = user_info_resp.json()
 
@@ -63,4 +64,3 @@ def google_login_or_create_user(request, access_token):
             print("Failed to save Google avatar:", e)
 
     return user
-

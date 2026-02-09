@@ -55,8 +55,8 @@ def remember_session(user, refresh, request, old_jti=None):
         expires_at = timezone.now() + timedelta(days=lifetime_days)
 
     if old_jti:
-            ActiveSession.objects.filter(jti=old_jti).delete()
-    
+        ActiveSession.objects.filter(jti=old_jti).delete()
+
     session = ActiveSession.objects.create(
         user=user,
         jti=refresh_jti,
@@ -112,7 +112,6 @@ def refresh_token(request):
         return Response({"error": "Invalid refresh token"}, status=401)
 
 
-
 def create_refresh_token_for_user(user):
     lifetime_days = getattr(user, "preferred_session_lifetime_days", 7)
 
@@ -148,22 +147,29 @@ import requests
 from rest_framework.response import Response
 from rest_framework import status
 
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def google_login(request):
     access_token = request.data.get("access_token")
     if not access_token:
-        return Response({"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     print(access_token)
-    token_info = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}").json()
+    token_info = requests.get(
+        f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}"
+    ).json()
     if "error" in token_info:
         return Response({"error": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
 
     email = token_info.get("email")
     print(email)
     if not email:
-        return Response({"error": "Email not found in token"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Email not found in token"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     user = google_login_or_create_user(request, access_token)
 
@@ -173,7 +179,6 @@ def google_login(request):
     response = Response({"access": str(refresh.access_token), "user": serializer.data})
     response = set_refresh_cookie(response, refresh)
     return response
-
 
     return response
 

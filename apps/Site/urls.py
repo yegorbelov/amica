@@ -17,15 +17,21 @@ urlpatterns = [
     path("get_general_info/", get_general_info, name="get_general_info"),
     path("get_contacts/", GetContacts, name="get_contacts"),
     path("users/search/", UserEmailSearchView.as_view(), name="user-email-search"),
-    path("protected-file/<int:file_id>/", ProtectedFileView.as_view(), name="protected-file-default"),
-    path("protected-file/<int:file_id>/<str:version>/", ProtectedFileView.as_view(), name="protected-file-versioned"),
+    path(
+        "protected-file/<int:file_id>/",
+        ProtectedFileView.as_view(),
+        name="protected-file-default",
+    ),
+    path(
+        "protected-file/<int:file_id>/<str:version>/",
+        ProtectedFileView.as_view(),
+        name="protected-file-versioned",
+    ),
     path(
         "api/protected-file/<int:file_id>/<str:file_type>/<str:version>/",
         ProtectedFileView.as_view(),
         name="protected-file-versioned",
     ),
-    
-    
     path("wallpapers/", UserWallpapersAPIView.as_view(), name="wallpaper-list"),
 ]
 

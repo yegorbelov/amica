@@ -9,6 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @shared_task
 def process_audio_task(audiofile_id):
     from apps.media_files.models import AudioFile
@@ -29,7 +30,9 @@ def process_audio_task(audiofile_id):
             mutagen_audio = MutagenFile(tmp.name)
             cover_data = None
             if mutagen_audio.tags:
-                apic_keys = [k for k in mutagen_audio.tags.keys() if k.startswith("APIC:")]
+                apic_keys = [
+                    k for k in mutagen_audio.tags.keys() if k.startswith("APIC:")
+                ]
                 if apic_keys:
                     cover_data = mutagen_audio.tags[apic_keys[0]].data
                 elif hasattr(mutagen_audio, "pictures") and mutagen_audio.pictures:
@@ -39,7 +42,9 @@ def process_audio_task(audiofile_id):
             audiofile.waveform = waveform
             if cover_data:
                 audiofile.cover.save("cover.jpg", ContentFile(cover_data), save=False)
-                logger.info(f"Audio {audiofile_id}: cover extracted, size={len(cover_data)} bytes")
+                logger.info(
+                    f"Audio {audiofile_id}: cover extracted, size={len(cover_data)} bytes"
+                )
             else:
                 logger.info(f"Audio {audiofile_id}: no cover found")
 

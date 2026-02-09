@@ -54,28 +54,39 @@ def compress_video_task(self, model_name: str, video_id: int):
             temp_output = tmp.name
 
         cmd = [
-            "ffmpeg", "-y",
-            "-fflags", "+genpts",
-            "-i", video_path,
+            "ffmpeg",
+            "-y",
+            "-fflags",
+            "+genpts",
+            "-i",
+            video_path,
             *duration_option,
             *scale_option,
             *audio_option,
-            "-c:v", "libx264",
-            "-profile:v", "baseline",
-            "-level", "3.0",
-            "-preset", "medium",
-            "-b:v", "2M",
-            "-maxrate", "2.5M",
-            "-bufsize", "3M",
-            "-g", "25",
-            "-keyint_min", "25",
-            "-sc_threshold", "0",
-            "-movflags", "+faststart+frag_keyframe+empty_moov+default_base_moof",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-level",
+            "3.0",
+            "-preset",
+            "medium",
+            "-b:v",
+            "2M",
+            "-maxrate",
+            "2.5M",
+            "-bufsize",
+            "3M",
+            "-g",
+            "25",
+            "-keyint_min",
+            "25",
+            "-sc_threshold",
+            "0",
+            "-movflags",
+            "+faststart+frag_keyframe+empty_moov+default_base_moof",
             temp_output,
         ]
-        
-        
-        
 
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
@@ -90,10 +101,13 @@ def compress_video_task(self, model_name: str, video_id: int):
         video_instance.status = "done"
 
         cmd_probe = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_streams",
-            video_field.path
+            video_field.path,
         ]
         result = subprocess.run(cmd_probe, capture_output=True, text=True)
 
@@ -102,12 +116,15 @@ def compress_video_task(self, model_name: str, video_id: int):
         audio_codec = "none"
 
         if result.returncode != 0:
-            logger.error(f"ffprobe failed (code {result.returncode}): {result.stderr.strip()}")
+            logger.error(
+                f"ffprobe failed (code {result.returncode}): {result.stderr.strip()}"
+            )
         else:
             try:
                 import json
+
                 probe_data = json.loads(result.stdout)
-                
+
                 has_audio = any(
                     stream.get("codec_type") == "audio"
                     for stream in probe_data.get("streams", [])
@@ -119,7 +136,9 @@ def compress_video_task(self, model_name: str, video_id: int):
                     if stream.get("codec_type") == "audio":
                         audio_codec = stream.get("codec_tag_string") or "mp4a"
 
-                logger.info(f"Compressed video codecs: video={video_codec}, audio={audio_codec}")
+                logger.info(
+                    f"Compressed video codecs: video={video_codec}, audio={audio_codec}"
+                )
                 logger.info(f"Video {video_id} has_audio: {has_audio}")
             except json.JSONDecodeError as json_err:
                 logger.error(f"ffprobe JSON parse error: {json_err}")
