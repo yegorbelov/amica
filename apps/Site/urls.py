@@ -33,6 +33,7 @@ urlpatterns = [
         name="protected-file-versioned",
     ),
     path("wallpapers/", UserWallpapersAPIView.as_view(), name="wallpaper-list"),
+    path("contact/", ContactAPIView.as_view(), name="contact-list"),
 ]
 
 urlpatterns += router.urls

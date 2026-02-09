@@ -822,3 +822,89 @@ class UserWallpapersAPIView(APIView):
                 {"detail": "Internal server error", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+            
+from django.shortcuts import get_object_or_404
+
+class ContactAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        owner = request.user
+        user_id = request.data.get("user_id")
+
+        if not user_id:
+            return Response(
+                {"detail": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = get_object_or_404(CustomUser, id=user_id)
+
+        if user == owner:
+            return Response(
+                {"detail": "You cannot add yourself to contacts"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            contact, created = Contact.objects.get_or_create(
+                owner=owner,
+                user=user,
+            )
+        except IntegrityError:
+            return Response(
+                {"detail": "Contact already exists"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(
+            {
+                "created": created,
+                "contact_id": contact.id,
+                "name": contact.name,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        contact_id = request.data.get("contact_id")
+
+        if not contact_id:
+            return Response(
+                {"detail": "contact_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        contact = get_object_or_404(Contact, id=contact_id)
+        contact.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def patch(self, request):
+        contact_id = request.data.get("contact_id")
+        new_name = request.data.get("name")
+
+        if not contact_id or new_name is None:
+            return Response(
+                {"detail": "contact_id and name are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        contact = get_object_or_404(Contact, id=contact_id)
+
+        if contact.owner != request.user:
+            return Response(
+                {"detail": "You do not have permission to edit this contact"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        contact.name = new_name
+        contact.save()
+
+        return Response(
+            {
+                "contact_id": contact.id,
+                "name": contact.name,
+            },
+            status=status.HTTP_200_OK,
+        )
