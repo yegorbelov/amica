@@ -173,7 +173,7 @@ class GetChat(APIView):
 
             serializer = ChatSerializer(chat, context={"request": request})
 
-            response_data = {"chat": serializer.data}
+            response_data = serializer.data
             response = Response(response_data, status=200)
             response["Content-Security-Policy"] = (
                 "default-src 'self'; "

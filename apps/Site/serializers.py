@@ -419,17 +419,20 @@ class ChatListSerializer(serializers.ModelSerializer):
     def get_unread_count(self, obj):
         return getattr(obj, "unread_count", 0)
 
-
+from apps.accounts.serializers.serializers import ProfileSerializer
 class ChatUserSerializer(serializers.ModelSerializer):
     is_contact = serializers.SerializerMethodField()
     contact_id = serializers.SerializerMethodField()
+    profile = ProfileSerializer(read_only=True)
 
     class Meta:
         model = CustomUser
         fields = (
             "id",
+            "username",
             "is_contact",
             "contact_id",
+            "profile",
         )
 
     def _get_contacts_cache(self):
@@ -451,19 +454,20 @@ class ChatUserSerializer(serializers.ModelSerializer):
 class ChatSerializer(serializers.ModelSerializer):
     messages = MessageSerializer(many=True, read_only=True)
     media = serializers.SerializerMethodField()
-    users = serializers.SerializerMethodField()
+    members = serializers.SerializerMethodField()
 
     class Meta:
         model = Chat
         fields = [
             "messages",
             "media",
-            "users",
+            "members",
         ]
 
-    def get_users(self, obj):
+    def get_members(self, obj):
         user = self._get_current_user()
         qs = obj.users.all()
+        print("qs", qs)
 
         if user:
             qs = qs.exclude(pk=user.pk)
