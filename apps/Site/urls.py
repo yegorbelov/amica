@@ -28,7 +28,7 @@ urlpatterns = [
         name="protected-file-versioned",
     ),
     path(
-        "api/protected-file/<int:file_id>/<str:file_type>/<str:version>/",
+        "protected-file/<int:file_id>/<str:file_type>/<str:version>/",
         ProtectedFileView.as_view(),
         name="protected-file-versioned",
     ),

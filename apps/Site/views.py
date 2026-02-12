@@ -39,11 +39,19 @@ class GetChats(APIView):
         last_message_subquery = Message.objects.filter(
             chat_id=OuterRef("pk"), is_deleted=False
         ).order_by("-date")
+        
+        member_count_subquery = (
+            ChatMember.objects
+            .filter(chat_id=OuterRef("pk"))
+            .values("chat")
+            .annotate(cnt=Count("id"))
+            .values("cnt")
+        )
 
         chats_qs = (
             Chat.objects.filter(users=user)
             .annotate(
-                users_count=Count("users", distinct=True),
+                users_count=Subquery(member_count_subquery),
                 last_message_id=Subquery(last_message_subquery.values("id")[:1]),
             )
             .order_by("-created_at")
@@ -706,30 +714,47 @@ User = get_user_model()
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def GetContacts(request):
-    try:
-        contacts = (
-            Contact.objects.filter(owner=request.user)
-            .select_related("user", "user__profile")
-            .prefetch_related(
-                "display_media",
-                "user__profile__profile_media",
+    user = request.user
+
+    contacts = (
+        Contact.objects.filter(owner=user)
+        .select_related("user", "user__profile")
+        .prefetch_related(
+            "display_media",
+            "user__profile__profile_media",
+        )
+    )
+
+    dialogs = (
+        Chat.objects.filter(chat_type=Chat.ChatType.DIALOG, users=user)
+        .prefetch_related(
+            Prefetch(
+                "users",
+                queryset=User.objects.only("id"),
             )
         )
+    )
 
-        serializer = ContactSerializer(
-            contacts, many=True, context={"request": request}
-        )
-        return Response({"contacts": serializer.data}, status=status.HTTP_200_OK)
+    dialog_map = {}
+    for chat in dialogs:
+        for u in chat.users.all():
+            if u.id != user.id:
+                dialog_map[u.id] = chat.id
 
-    except Exception as e:
-        logger.error(
-            f"Error in GetContacts for user {request.user.id}: {str(e)}",
-            exc_info=True,
-        )
-        return Response(
-            {"error": "Internal server error"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    serializer = ContactSerializer(
+        contacts,
+        many=True,
+        context={
+            "request": request,
+            "dialog_map": dialog_map,
+        },
+    )
+    # print("--- SQL Queries ---")
+    # for q in connection.queries:
+    #     print(q["sql"])
+
+    return Response({"contacts": serializer.data}, status=200)
+
 
 
 class UserEmailSearchView(APIView):

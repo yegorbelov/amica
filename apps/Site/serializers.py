@@ -215,16 +215,25 @@ class ContactSerializer(serializers.ModelSerializer):
     def _resolve_display(self, obj):
         user = obj.user
         profile = getattr(user, "profile", None)
-
+    
         name = obj.name.strip() if obj.name else user.display_name or user.username
-
-        avatar = (
-            obj.display_media.filter(is_primary=True).first()
-            or (profile and profile.profile_media.filter(is_primary=True).first())
-            or None
+    
+        contact_media = next(
+            (m for m in obj.display_media.all() if m.is_primary),
+            None
         )
-
+    
+        profile_media = None
+        if profile:
+            profile_media = next(
+                (m for m in profile.profile_media.all() if m.is_primary),
+                None
+            )
+    
+        avatar = contact_media or profile_media
+    
         return {"name": name, "avatar": avatar}
+    
 
     def get_name(self, obj):
         return self._get_display_cached(obj)["name"]
@@ -252,15 +261,8 @@ class ContactSerializer(serializers.ModelSerializer):
         )
 
     def get_chat_id(self, obj):
-        user = self._get_current_user()
-        chat = (
-            Chat.objects.filter(chat_type=Chat.ChatType.DIALOG)
-            .filter(users=user)
-            .filter(users=obj.user)
-            .distinct()
-            .first()
-        )
-        return chat.id if chat else None
+        dialog_map = self.context.get("dialog_map", {})
+        return dialog_map.get(obj.user.id)
 
 
 from rest_framework import serializers
@@ -301,13 +303,14 @@ class ChatListSerializer(serializers.ModelSerializer):
     unread_count = serializers.SerializerMethodField()
     primary_media = serializers.SerializerMethodField()
     info = serializers.SerializerMethodField()
+    type = serializers.CharField(source="chat_type")
 
     class Meta:
         model = Chat
         fields = [
             "id",
             "name",
-            "chat_type",
+            "type",
             "last_message",
             "unread_count",
             "primary_media",
@@ -404,6 +407,7 @@ class ChatListSerializer(serializers.ModelSerializer):
         return self._get_display_cached(obj)["name"]
 
     def get_info(self, obj):
+        print("obj", obj.users_count)
         if obj.is_dialog:
             return self._get_display_cached(obj)["last_seen"]
         return obj.users_count
