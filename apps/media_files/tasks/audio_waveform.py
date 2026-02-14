@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task
-def process_audio_task(audiofile_id):
+def process_audio_task(audiofile_id, message_id, user_id):
     from apps.media_files.models import AudioFile
+    from apps.Site.models import Message
+    from apps.Site.services.ws_sender import send_ws_message
 
     try:
         audiofile = AudioFile.objects.get(id=audiofile_id)
@@ -51,6 +53,10 @@ def process_audio_task(audiofile_id):
             audiofile.save(update_fields=["duration", "waveform", "cover"])
 
         logger.info(f"Processed audio {audiofile_id}: duration={duration}s")
+        
+        message = Message.objects.get(id=message_id)
+
+        send_ws_message(message, user_id)
 
         return {"duration": duration, "waveform": waveform}
 

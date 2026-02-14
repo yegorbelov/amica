@@ -486,6 +486,9 @@ class MessageViewSet(viewsets.ViewSet):
                 )
 
                 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
+                
+                needs_processing = False
+                created_audio_file = None
 
                 if files:
                     for uploaded_file in files:
@@ -503,32 +506,41 @@ class MessageViewSet(viewsets.ViewSet):
                             new_file = VideoFile.objects.create(file=filename)
                         elif mime_type and mime_type.startswith("audio/"):
                             from apps.media_files.models import AudioFile
-
+                            from apps.media_files.tasks.audio_waveform import process_audio_task
+                            needs_processing = True
                             new_file = AudioFile.objects.create(file=filename)
+                            process_audio_task.delay(
+                                audiofile_id=new_file.id,
+                                message_id=new_message.id,
+                                user_id=user.id
+                            )
                         else:
                             new_file = File.objects.create(file=filename)
-
                         new_message.file.add(new_file)
 
                 new_message.save()
+                
+                if not needs_processing:
+                    from apps.Site.services.ws_sender import send_ws_message
+                    send_ws_message(new_message, user.id)
 
-                channel_layer = get_channel_layer()
+                # channel_layer = get_channel_layer()
 
-                serialized_message = MessageSerializer(
-                    new_message, context={"request": request, "user_id": user.id}
-                ).data
+                # serialized_message = MessageSerializer(
+                #     new_message, context={"request": request, "user_id": user.id}
+                # ).data
 
-                user_ids = list(chat.users.values_list("id", flat=True))
+                # user_ids = list(chat.users.values_list("id", flat=True))
 
-                for user_id in user_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f"user_{user_id}",
-                        {
-                            "type": "chat_message",
-                            "chat_id": chat_id,
-                            "data": serialized_message,
-                        },
-                    )
+                # for user_id in user_ids:
+                #     async_to_sync(channel_layer.group_send)(
+                #         f"user_{user_id}",
+                #         {
+                #             "type": "chat_message",
+                #             "chat_id": chat_id,
+                #             "data": serialized_message,
+                #         },
+                #     )
 
                 return JsonResponse(
                     {

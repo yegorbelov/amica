@@ -349,16 +349,16 @@ from django.dispatch import receiver
 from django.db.models.signals import post_save, pre_save
 
 
-@receiver(post_save, sender=AudioFile)
-def process_audiofile(sender, instance, created, **kwargs):
-    file_changed = False
+# @receiver(post_save, sender=AudioFile)
+# def process_audiofile(sender, instance, created, **kwargs):
+#     file_changed = False
 
-    if created:
-        file_changed = True
-    else:
-        old = sender.objects.filter(pk=instance.pk).values("file").first()
-        if old and old["file"] != instance.file.name:
-            file_changed = True
+#     if created:
+#         file_changed = True
+#     else:
+#         old = sender.objects.filter(pk=instance.pk).values("file").first()
+#         if old and old["file"] != instance.file.name:
+#             file_changed = True
 
-    if file_changed and instance.file:
-        process_audio_task.delay(instance.id)
+#     if file_changed and instance.file:
+#         process_audio_task.delay(instance.id)

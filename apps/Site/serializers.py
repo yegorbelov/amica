@@ -434,6 +434,7 @@ class ChatUserSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "username",
+            "email",
             "is_contact",
             "contact_id",
             "profile",
