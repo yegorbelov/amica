@@ -20,7 +20,6 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
         ]
 
     def _get_thumbnail_url(self, obj, version):
-        print("VERSION:", obj, version)
         if getattr(obj, version, None):
             request = self.context.get("request")
             url = reverse(

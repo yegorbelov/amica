@@ -69,9 +69,6 @@ def remove_recipients_when_user_leaves_chat(sender, instance, action, pk_set, **
         user_id__in=user_ids, message__chat=instance
     ).delete()
 
-    print(
-        f"[INFO] Removed MessageRecipient for users={user_ids} from chat={instance.id}"
-    )
 
 
 logger = logging.getLogger(__name__)

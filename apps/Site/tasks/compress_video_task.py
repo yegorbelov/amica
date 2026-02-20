@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task(bind=True, max_retries=3, retry_backoff=True)
 def compress_video_task(self, model_name: str, video_id: int):
-    print(f"Compressing {model_name} id={video_id}")
+    logger.info(f"Compressing {model_name} id={video_id}")
     model_map = {
         "DisplayVideo": DisplayVideo,
         "VideoFile": VideoFile,

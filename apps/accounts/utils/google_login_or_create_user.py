@@ -6,12 +6,9 @@ from django.core.files.base import ContentFile
 from apps.media_files.models.models import DisplayPhoto
 
 from ...accounts.models import CustomUser
+import logging
 
-
-import requests
-from io import BytesIO
-from django.core.files.base import ContentFile
-
+logger = logging.getLogger(__name__)
 
 def google_login_or_create_user(request, access_token):
     token_info_resp = requests.get(
@@ -61,6 +58,6 @@ def google_login_or_create_user(request, access_token):
             )
             img_temp.close()
         except Exception as e:
-            print("Failed to save Google avatar:", e)
+            logger.error("Failed to save Google avatar: %s", e)
 
     return user

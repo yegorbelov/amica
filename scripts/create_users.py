@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
-from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def run():
@@ -10,7 +12,7 @@ def run():
         admin = User.objects.create_superuser(
             username="admin", email=admin_email, password="admin"
         )
-        print(f"Created admin: {admin_email}")
+        logger.info(f"Created admin: {admin_email}")
 
     names = [
         "Calista Monroe",
@@ -132,4 +134,4 @@ def run():
                 first_name=first_name,
                 last_name=last_name,
             )
-            print(f"Created user: {email} with username: {user.username}")
+            logger.info(f"Created user: {email} with username: {user.username}")

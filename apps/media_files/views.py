@@ -76,7 +76,6 @@ class DisplayMediaViewSet(viewsets.ViewSet):
 
     def create(self, request, *args, **kwargs):
         obj = self.get_object_instance()
-        print(obj)
         if not obj:
             return Response({"detail": "Missing content_type or object_id"}, status=400)
 

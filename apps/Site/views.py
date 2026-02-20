@@ -81,10 +81,18 @@ class GetChats(APIView):
         last_message_ids = [
             chat.last_message_id for chat in chats_qs if chat.last_message_id
         ]
+        recipients_prefetch = Prefetch(
+            "recipients",
+            queryset=MessageRecipient.objects.filter(
+                read_date__isnull=False
+            ),
+            to_attr="read_recipients",
+        )
+
         messages_qs = (
             Message.objects.filter(id__in=last_message_ids)
             .select_related("user")
-            .prefetch_related("file")
+            .prefetch_related("file", recipients_prefetch)
         )
         last_message_map = {m.chat_id: m for m in messages_qs}
 
@@ -296,11 +304,8 @@ class ProtectedFileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_file_path_and_type(self, file_obj, version=None):
-        print("TYPE1:")
 
         if isinstance(file_obj, DisplayPhoto):
-            print("TYPE4:", type(file_obj))
-            print("IS PHOTO:", isinstance(file_obj, DisplayPhoto))
             if version in ("thumbnail_small", "thumbnail_medium"):
                 file_field = getattr(file_obj, version, None)
                 if not file_field:
@@ -357,7 +362,6 @@ class ProtectedFileView(APIView):
             return path, "application/octet-stream"
 
     def get(self, request, file_id, version=None, file_type=None, format=None):
-        print(file_id, file_type)
         if file_type == "display_photo":
             try:
                 file_obj = DisplayPhoto.objects.get(id=file_id)
@@ -368,7 +372,6 @@ class ProtectedFileView(APIView):
                 file_obj = File.objects.get(id=file_id)
             except File.DoesNotExist:
                 try:
-                    print("request", file_id)
                     file_obj = DisplayPhoto.objects.get(id=file_id)
                 except DisplayPhoto.DoesNotExist:
                     try:
@@ -555,11 +558,10 @@ class MessageViewSet(viewsets.ViewSet):
         except Chat.DoesNotExist:
             return JsonResponse({"error": "Chat not found"}, status=404)
         except Exception as e:
-            print(f"Error in send view: {e}")
+            logger.error(f"Error in send view: {e}")
             return JsonResponse({"error": "Server error"}, status=500)
 
     def update(self, request, pk=None):
-        print("request")
         try:
             message = Message.objects.get(pk=pk, user=request.user)
             serializer = MessageSerializer(
@@ -575,7 +577,6 @@ class MessageViewSet(viewsets.ViewSet):
             )
 
     def partial_update(self, request, pk=None):
-        print("request")
         try:
             message = Message.objects.get(pk=pk, user=request.user)
             serializer = MessageSerializer(
@@ -844,7 +845,7 @@ class UserWallpapersAPIView(APIView):
                     },
                 )
             except Exception as e:
-                print(f"Channels error: {e}")
+                logger.error(f"Channels error: {e}")
 
             return Response(
                 {

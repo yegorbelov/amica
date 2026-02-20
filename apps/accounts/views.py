@@ -157,7 +157,6 @@ def google_login(request):
             {"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST
         )
 
-    print(access_token)
     token_info = requests.get(
         f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}"
     ).json()
@@ -165,7 +164,6 @@ def google_login(request):
         return Response({"error": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
 
     email = token_info.get("email")
-    print(email)
     if not email:
         return Response(
             {"error": "Email not found in token"}, status=status.HTTP_400_BAD_REQUEST

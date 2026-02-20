@@ -75,13 +75,7 @@ class MessageSerializer(serializers.ModelSerializer):
         return serialized_files
 
     def get_is_viewed(self, obj):
-        request = self.context.get("request")
-        if not request or not request.user.is_authenticated:
-            return False
-
-        recipients = getattr(obj, "read_recipients", [])
-
-        return any(r.user_id == request.user.id for r in recipients)
+        return bool(getattr(obj, "read_recipients", []))
 
     def get_reactions_summary(self, obj):
         from collections import Counter
@@ -407,7 +401,6 @@ class ChatListSerializer(serializers.ModelSerializer):
         return self._get_display_cached(obj)["name"]
 
     def get_info(self, obj):
-        print("obj", obj.users_count)
         if obj.is_dialog:
             return self._get_display_cached(obj)["last_seen"]
         return obj.users_count
@@ -415,7 +408,7 @@ class ChatListSerializer(serializers.ModelSerializer):
     def get_last_message(self, obj):
         message = getattr(obj, "last_message", None)
         return (
-            MessageChatListSerializer(message, context=self.context).data
+            MessageSerializer(message, context=self.context).data
             if message
             else None
         )
@@ -472,7 +465,6 @@ class ChatSerializer(serializers.ModelSerializer):
     def get_members(self, obj):
         user = self._get_current_user()
         qs = obj.users.all()
-        print("qs", qs)
 
         if user:
             qs = qs.exclude(pk=user.pk)
