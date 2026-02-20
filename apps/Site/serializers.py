@@ -16,7 +16,7 @@ from .models import *
 # class UserProfileSerializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = Profile
-#         fields = ["primary_avatar"]
+#         fields = ["primary_media"]
 
 
 class UserMessageSerializer(serializers.ModelSerializer):

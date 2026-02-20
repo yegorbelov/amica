@@ -6,7 +6,7 @@ from ..models import *
 
 
 class ProfileSerializer(serializers.ModelSerializer):
-    primary_avatar = serializers.SerializerMethodField()
+    primary_media = serializers.SerializerMethodField()
     media = serializers.SerializerMethodField()
 
     class Meta:
@@ -18,11 +18,11 @@ class ProfileSerializer(serializers.ModelSerializer):
             "phone",
             "date_of_birth",
             "location",
-            "primary_avatar",
+            "primary_media",
             "media",
         )
 
-    def get_primary_avatar(self, obj):
+    def get_primary_media(self, obj):
         primary = obj.profile_media.filter(is_primary=True).first()
         if not primary:
             primary = obj.profile_media.order_by("-created_at").first()
