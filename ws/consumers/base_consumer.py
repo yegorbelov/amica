@@ -21,7 +21,6 @@ class BaseConsumer(AsyncWebsocketConsumer):
         try:
             self.user = self.scope.get("user")
             self.session_jti = self.scope.get("access_jti")
-            print(self.user, self.session_jti)
             if not self.scope.get("auth_valid") or self.user.is_anonymous:
                 logger.warning("WebSocket connection rejected: Unauthorized")
                 await self.close(code=4001)

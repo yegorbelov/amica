@@ -62,7 +62,6 @@ class AppConsumer(BaseConsumer):
             logger.error(f"Error handling message type '{message_type}': {e}")
 
     async def handle_chat_message(self, data, chat_id):
-        print(data)
         message_content = data.get("data", {}).get("value", "").strip()
         other_user_id = data.get("data", {}).get("user_id")
 
@@ -72,14 +71,12 @@ class AppConsumer(BaseConsumer):
             )
 
         if chat_id <= 0:
-            print(other_user_id)
             if not other_user_id:
                 return await self.send_json(
                     {"type": "error", "message": "user_id required"}
                 )
 
             chat, created = await self.get_or_create_dialog(other_user_id)
-            print(chat, created)
 
             await self.broadcast_to_chat_users(
                 chat.id,
