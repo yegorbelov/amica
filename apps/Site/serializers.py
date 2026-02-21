@@ -179,6 +179,7 @@ class ContactSerializer(serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
     primary_media = serializers.SerializerMethodField()
     chat_id = serializers.SerializerMethodField()
+    # last_seen = serializers.SerializerMethodField()
 
     class Meta:
         model = Contact
@@ -192,6 +193,7 @@ class ContactSerializer(serializers.ModelSerializer):
             "is_favorite",
             "created_at",
             "chat_id",
+            # "last_seen"
         ]
 
     def _get_current_user(self):
@@ -257,6 +259,10 @@ class ContactSerializer(serializers.ModelSerializer):
     def get_chat_id(self, obj):
         dialog_map = self.context.get("dialog_map", {})
         return dialog_map.get(obj.user.id)
+
+    def get_last_seen(self, obj):
+        last_seen = self.context.get("last_seen", {})
+        return last_seen.get(obj.user.id)
 
 
 from rest_framework import serializers
