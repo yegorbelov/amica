@@ -26,6 +26,10 @@ class BearerJWTAuthentication(JWTAuthentication):
 
         user, token = result
 
+        profile = getattr(user, "profile", None)
+        if profile:
+            profile.update_last_seen()
+
         refresh_token_str = request.COOKIES.get("refresh_token")
         if refresh_token_str:
             try:
