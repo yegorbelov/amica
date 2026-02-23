@@ -39,6 +39,19 @@ def create_refresh_token(user, session_lifetime_days):
     )
     return token
 
+def get_client_ip(request):
+    ip = request.META.get("HTTP_CF_CONNECTING_IP")
+    if ip:
+        return ip.strip()
+
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0].strip()
+        if ip:
+            return ip
+
+    return request.META.get("REMOTE_ADDR")
+
 
 def remember_session(user, refresh, request, old_jti=None):
     refresh_jti = str(refresh["jti"])
@@ -57,11 +70,13 @@ def remember_session(user, refresh, request, old_jti=None):
     if old_jti:
         ActiveSession.objects.filter(jti=old_jti).delete()
 
+    ip = get_client_ip(request)
+
     session = ActiveSession.objects.create(
         user=user,
         jti=refresh_jti,
         refresh_token=str(refresh),
-        ip_address=request.META.get("REMOTE_ADDR"),
+        ip_address=ip,
         user_agent=request.META.get("HTTP_USER_AGENT"),
         expires_at=expires_at,
     )

@@ -60,11 +60,15 @@ import re
 
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.gis.geoip2 import GeoIP2
+from django.conf import settings
 
 
 class ActiveSessionSerializer(serializers.ModelSerializer):
     device = serializers.SerializerMethodField()
     is_current = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
+    country = serializers.SerializerMethodField()
 
     class Meta:
         model = ActiveSession
@@ -77,6 +81,8 @@ class ActiveSessionSerializer(serializers.ModelSerializer):
             "last_active",
             "is_current",
             "device",
+            "city",
+            "country",
         )
 
     def get_is_current(self, obj) -> bool:
@@ -93,6 +99,20 @@ class ActiveSessionSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
+    def get_city(self, obj):
+        g = GeoIP2()
+        try:
+            return g.city(obj.ip_address).get('city')
+        except Exception:
+            return None
+
+    def get_country(self, obj):
+        g = GeoIP2()
+        try:
+            return g.city(obj.ip_address).get('country_name')
+        except Exception:
+            return None
+            
     def get_device(self, obj):
         ua = obj.user_agent or ""
 

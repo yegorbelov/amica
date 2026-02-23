@@ -42,3 +42,6 @@ webauthn==2.7.0
 django-webauthn==0.0.2
 watchfiles==1.1.1
 black==26.1.0
+
+#services
+geoip2==5.2.0
