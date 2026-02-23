@@ -623,8 +623,7 @@ def get_general_info(request):
                     to_attr="prefetched_videos",
                 ),
             )
-            .filter(pk=request.user.pk)
-            .first()
+            .get(pk=request.user.pk)
         )
 
         if not user:
@@ -649,7 +648,9 @@ def get_general_info(request):
                 active_wallpaper = {"id": "default-0"}
 
         serializer = UserSerializer(user, context={"request": request})
-
+        # print("--- SQL Queries ---")
+        # for q in connection.queries:
+        #     print(f"{q['time']}s -> {q['sql']}")
         return Response(
             {
                 "success": True,

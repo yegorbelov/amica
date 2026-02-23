@@ -51,9 +51,9 @@ class UserSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
-    def to_representation(self, instance):
-        ret = super().to_representation(instance)
-        return ret
+    # def to_representation(self, instance):
+    #     ret = super().to_representation(instance)
+    #     return ret
 
 
 import re

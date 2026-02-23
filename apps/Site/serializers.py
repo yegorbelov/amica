@@ -174,7 +174,7 @@ class ChatSerializerContacts(serializers.ModelSerializer):
 
 
 class ContactSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
+    # user = UserSerializer(read_only=True)
     name = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
     primary_media = serializers.SerializerMethodField()
@@ -185,7 +185,7 @@ class ContactSerializer(serializers.ModelSerializer):
         model = Contact
         fields = [
             "id",
-            "user",
+            # "user",
             "name",
             "avatar",
             "primary_media",
