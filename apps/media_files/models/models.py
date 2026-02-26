@@ -230,13 +230,17 @@ class File(PolymorphicModel):
             ".ico",
             ".svg",
             ".tiff",
+            ".heic",
+            ".heif",
+            ".jfif",
+            ".apng",
         ]:
             return "image"
-        if ext in [".mp4", ".mov", ".avi", ".webm", ".mkv", ".mpeg", ".flv", ".m4v"]:
+        if ext in [".mp4", ".mov", ".avi", ".webm", ".mkv", ".mpeg", ".flv", ".m4v", ".ts", ".vob", ".3gp", ".3g2", ".m4v", ".m4p", ".m4b", ".m4r", ".m4v", ".m4p", ".m4b", ".m4r"]:
             return "video"
-        if ext in [".mp3", ".wav", ".ogg", ".flac", ".m4a"]:
+        if ext in [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".acc", ".wma"]:
             return "audio"
-        if ext in [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt"]:
+        if ext in [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".odt", ".ods", ".odp", ".csv"]:
             return "document"
         return "other"
 
