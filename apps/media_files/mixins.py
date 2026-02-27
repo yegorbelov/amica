@@ -1,6 +1,6 @@
 import os
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageOps
 from django.db import models
 from django.core.files.base import ContentFile
 
@@ -22,6 +22,7 @@ class ImageProcessingMixin(models.Model):
             return
 
         img = Image.open(image_field)
+        img = ImageOps.exif_transpose(img)
         self.width, self.height = img.size
         self.dominant_color = self._get_average_color(img)
 

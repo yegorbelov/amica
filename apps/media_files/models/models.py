@@ -236,9 +236,9 @@ class File(PolymorphicModel):
             ".apng",
         ]:
             return "image"
-        if ext in [".mp4", ".mov", ".avi", ".webm", ".mkv", ".mpeg", ".flv", ".m4v", ".ts", ".vob", ".3gp", ".3g2", ".m4v", ".m4p", ".m4b", ".m4r", ".m4v", ".m4p", ".m4b", ".m4r"]:
+        if ext in [".mp4", ".mov", ".avi", ".webm", ".mkv", ".mpeg", ".flv", ".m4v", ".ts", ".vob", ".3gp", ".3g2", ".m4p", ".m4b", ".m4r"]:
             return "video"
-        if ext in [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".acc", ".wma"]:
+        if ext in [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".wma"]:
             return "audio"
         if ext in [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".odt", ".ods", ".odp", ".csv"]:
             return "document"
