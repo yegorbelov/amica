@@ -7,8 +7,14 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import ActiveSession
+from apps.accounts.serializers.serializers import UserSerializer
 from apps.accounts.services.sessions import update_user_session_lifetime
-from apps.accounts.views import get_new_access_token_for_user
+from apps.accounts.views import (
+    get_access_token_for_session,
+    get_new_access_token_for_user,
+    create_refresh_token_for_user,
+    remember_session_from_scope,
+)
 from apps.Site.models import (
     Chat,
     Message,
@@ -67,6 +73,10 @@ class AppConsumer(BaseConsumer):
                 await self.handle_get_contacts()
             elif message_type == "refresh_token":
                 await self.handle_refresh_token()
+            elif message_type == "login":
+                await self.handle_login(data)
+            elif message_type == "signup":
+                await self.handle_signup(data)
             elif message_type == "add_user_wallpaper":
                 await self.handle_add_user_wallpaper(data)
             elif message_type == "set_active_wallpaper":
@@ -273,17 +283,113 @@ class AppConsumer(BaseConsumer):
                 {"type": "error", "message": "Invalid refresh token"}
             )
 
-    def _refresh_access_from_refresh_token(self, token_str):
-        from rest_framework_simplejwt.exceptions import TokenError
+    def _do_login(self, username_or_email, password):
+        from django.contrib.auth import authenticate
 
-        try:
-            old_refresh = RefreshToken(token_str)
-            user = ActiveSession.objects.get(
-                jti=str(old_refresh["jti"])
-            ).user
-            return get_new_access_token_for_user(user)
-        except (TokenError, KeyError, ActiveSession.DoesNotExist):
+        user = authenticate(username=username_or_email, password=password)
+        if not user:
             return None
+        refresh = create_refresh_token_for_user(user)
+        remember_session_from_scope(self.scope, user, refresh)
+        jti = str(refresh["jti"])
+        access = get_access_token_for_session(jti, user)
+        user_data = UserSerializer(user, context={"user": user}).data
+        return {"access": access, "refresh": str(refresh), "user": user_data, "jti": jti, "user_obj": user}
+
+    def _do_signup(self, username, email, password):
+        from django.db import IntegrityError
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        try:
+            user = User.objects.create_user(
+                email=email, password=password, username=username or email
+            )
+        except IntegrityError:
+            return None
+        refresh = create_refresh_token_for_user(user)
+        remember_session_from_scope(self.scope, user, refresh)
+        jti = str(refresh["jti"])
+        access = get_access_token_for_session(jti, user)
+        user_data = UserSerializer(user, context={"user": user}).data
+        return {"access": access, "refresh": str(refresh), "user": user_data, "jti": jti, "user_obj": user}
+
+    async def handle_login(self, data):
+        try:
+            identifier = (data.get("email") or data.get("username") or "").strip()
+            password = data.get("password") or ""
+            if not identifier or not password:
+                await self.send_json(
+                    {"type": "login_response", "error": "username and password required"}
+                )
+                return
+            result = await database_sync_to_async(self._do_login)(identifier, password)
+            if not result:
+                await self.send_json(
+                    {"type": "login_response", "error": "Invalid credentials"}
+                )
+                return
+            user = result["user_obj"]
+            self.scope["user"] = user
+            self.user = user
+            self.scope["auth_valid"] = True
+            self.scope["access_jti"] = result["jti"]
+            self.user_group_name = f"user_{user.id}"
+            self.session_group_name = f"session_{result['jti']}"
+            await self.channel_layer.group_add(self.user_group_name, self.channel_name)
+            await self.channel_layer.group_add(
+                self.session_group_name, self.channel_name
+            )
+            await self.send_json(
+                {
+                    "type": "login_response",
+                    "access": result["access"],
+                    "refresh": result["refresh"],
+                    "user": result["user"],
+                }
+            )
+        except Exception as e:
+            logger.exception("handle_login failed: %s", e)
+            await self.send_json(
+                {"type": "login_response", "error": str(e) or "Login failed"}
+            )
+
+    async def handle_signup(self, data):
+        username = (data.get("username") or "").strip()
+        email = (data.get("email") or "").strip()
+        password = data.get("password") or ""
+        if not email or not password:
+            await self.send_json(
+                {"type": "signup_response", "error": "email and password required"}
+            )
+            return
+        result = await database_sync_to_async(self._do_signup)(
+            username or email, email, password
+        )
+        if not result:
+            await self.send_json(
+                {"type": "signup_response", "error": "User already exists"}
+            )
+            return
+        user = result["user_obj"]
+        self.scope["user"] = user
+        self.user = user
+        self.scope["auth_valid"] = True
+        self.scope["access_jti"] = result["jti"]
+        self.user_group_name = f"user_{user.id}"
+        self.session_group_name = f"session_{result['jti']}"
+        await self.channel_layer.group_add(self.user_group_name, self.channel_name)
+        await self.channel_layer.group_add(
+            self.session_group_name, self.channel_name
+        )
+        await self.send_json(
+            {
+                "type": "signup_response",
+                "access": result["access"],
+                "refresh": result["refresh"],
+                "user": result["user"],
+            }
+        )
 
     @database_sync_to_async
     def get_or_create_dialog(self, other_user_id):

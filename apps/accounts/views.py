@@ -96,6 +96,60 @@ def remember_session(user, refresh, request, old_jti=None):
     return session
 
 
+def _get_scope_headers(scope):
+    """Return dict of lowercased header names to string values."""
+    out = {}
+    for k, v in scope.get("headers", []):
+        if isinstance(k, bytes):
+            k = k.decode("latin1")
+        if isinstance(v, bytes):
+            v = v.decode("latin1")
+        out[k.lower()] = v
+    return out
+
+
+def remember_session_from_scope(scope, user, refresh, old_jti=None):
+    """Create ActiveSession for WS login/signup. Uses scope headers for IP/user_agent."""
+    refresh_jti = str(refresh["jti"])
+    lifetime_days = getattr(user, "preferred_session_lifetime_days", 7)
+    if (
+        lifetime_days == 500
+        or lifetime_days == 1000
+        or lifetime_days == 3000
+        or lifetime_days == 6000
+    ):
+        expires_at = timezone.now() + timedelta(seconds=lifetime_days / 100)
+    else:
+        expires_at = timezone.now() + timedelta(days=lifetime_days)
+    if old_jti:
+        ActiveSession.objects.filter(jti=old_jti).delete()
+    headers = _get_scope_headers(scope)
+    ip = (
+        headers.get("cf-connecting-ip")
+        or (headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        or headers.get("x-real-ip")
+        or ""
+    )
+    user_agent = headers.get("user-agent", "")
+    session = ActiveSession.objects.create(
+        user=user,
+        jti=refresh_jti,
+        refresh_token=str(refresh),
+        ip_address=ip or "ws",
+        user_agent=user_agent,
+        expires_at=expires_at,
+    )
+    try:
+        flush_expired_token.apply_async(args=[session.id], eta=expires_at)
+    except Exception as e:
+        logger.warning(
+            "Could not schedule flush_expired_token for session %s: %s",
+            session.id,
+            e,
+        )
+    return session
+
+
 from datetime import datetime
 from datetime import timezone as dt_timezone
 
@@ -161,9 +215,9 @@ def get_access_token_for_session(session_jti, user):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):
-    user = authenticate(
-        username=request.data.get("username"), password=request.data.get("password")
-    )
+    identifier = request.data.get("email") or request.data.get("username")
+    password = request.data.get("password")
+    user = authenticate(username=identifier, password=password)
     if not user:
         return Response({"error": "Invalid credentials"}, status=400)
 

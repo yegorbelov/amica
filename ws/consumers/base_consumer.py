@@ -23,8 +23,10 @@ class BaseConsumer(AsyncWebsocketConsumer):
             self.user = self.scope.get("user")
             self.session_jti = self.scope.get("access_jti")
             if not self.scope.get("auth_valid") or self.user.is_anonymous:
-                logger.warning("WebSocket connection rejected: Unauthorized")
-                await self.close(code=4001)
+                await self.accept()
+                await self.send(
+                    json.dumps({"type": "connection_open", "authenticated": False})
+                )
                 return
 
             self.user_group_name = f"user_{self.user.id}"
@@ -69,37 +71,25 @@ class BaseConsumer(AsyncWebsocketConsumer):
             await self.send_json({"type": "error", "message": "Invalid JSON format"})
             return
 
+        if not self.scope.get("auth_valid"):
+            if data.get("type") in ("login", "signup"):
+                try:
+                    await self.handle_message(data)
+                except Exception as e:
+                    logger.exception("Error in handle_message: %s", e)
+                    await self.send_json(
+                        {"type": "error", "message": "Internal server error"}
+                    )
+            elif data.get("type") == "auth":
+                await self._handle_auth_upgrade(data)
+            else:
+                await self.send_json(
+                    {"type": "error", "message": "Authentication required"}
+                )
+            return
+
         if data.get("type") == "auth":
-            token = data.get("token")
-            user = await self._get_user_from_access_token(token)
-            if not user:
-                await self.close(code=4001)
-                return
-
-            self.scope["user"] = user
-            self.user = user
-            self.scope["auth_valid"] = True
-
-            self.session_jti = await self.get_user_active_session_jti(user)
-            if not self.session_jti:
-                await self.close(code=4003)
-                return
-            self.scope["access_jti"] = self.session_jti
-
-            self.user_group_name = f"user_{self.user.id}"
-            self.session_group_name = f"session_{self.session_jti}"
-            await self.channel_layer.group_add(self.user_group_name, self.channel_name)
-            await self.channel_layer.group_add(
-                self.session_group_name, self.channel_name
-            )
-
-            await self.send_json(
-                {
-                    "type": "connection_established",
-                    "user_id": self.user.id,
-                    "session_jti": self.session_jti,
-                }
-            )
+            await self._handle_auth_upgrade(data)
             return
 
         if data.get("type") == "refresh_token":
@@ -134,6 +124,39 @@ class BaseConsumer(AsyncWebsocketConsumer):
 
     async def handle_message(self, data):
         raise NotImplementedError("handle_message must be implemented in subclass")
+
+    async def _handle_auth_upgrade(self, data):
+        """Upgrade an anonymous connection with an access token (e.g. after HTTP login)."""
+        token = data.get("token")
+        user = await self._get_user_from_access_token(token)
+        if not user:
+            await self.close(code=4001)
+            return
+
+        self.scope["user"] = user
+        self.user = user
+        self.scope["auth_valid"] = True
+
+        self.session_jti = await self.get_user_active_session_jti(user)
+        if not self.session_jti:
+            await self.close(code=4003)
+            return
+        self.scope["access_jti"] = self.session_jti
+
+        self.user_group_name = f"user_{self.user.id}"
+        self.session_group_name = f"session_{self.session_jti}"
+        await self.channel_layer.group_add(self.user_group_name, self.channel_name)
+        await self.channel_layer.group_add(
+            self.session_group_name, self.channel_name
+        )
+
+        await self.send_json(
+            {
+                "type": "connection_established",
+                "user_id": self.user.id,
+                "session_jti": self.session_jti,
+            }
+        )
 
     @database_sync_to_async
     def _is_session_active(self):
