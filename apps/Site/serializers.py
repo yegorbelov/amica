@@ -49,7 +49,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # "user_reaction",
             "is_own",
             # "is_deleted",
-            # "edit_date",
+            "edit_date",
             # "forwarded",
             # "reply_to",
             # "reply_to_message",

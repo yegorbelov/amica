@@ -47,7 +47,7 @@ class AppConsumer(BaseConsumer):
         chat_id = data.get("chat_id")
 
         if (
-            message_type in ("chat_message", "message_reaction", "message_viewed")
+            message_type in ("chat_message", "message_reaction", "message_viewed", "edit_message", "delete_message")
             and not chat_id
         ):
             return await self.send_json(
@@ -57,6 +57,10 @@ class AppConsumer(BaseConsumer):
         try:
             if message_type == "chat_message":
                 await self.handle_chat_message(data, chat_id)
+            elif message_type == "edit_message":
+                await self.handle_edit_message(data, data.get("chat_id"))
+            elif message_type == "delete_message":
+                await self.handle_delete_message(data, data.get("chat_id"))
             elif message_type == "message_reaction":
                 await self.handle_message_reaction(data)
             elif message_type == "message_viewed":
@@ -128,6 +132,69 @@ class AppConsumer(BaseConsumer):
             chat_id,
             "chat_message",
             {"chat_id": chat_id, "data": serialized},
+        )
+
+    async def handle_edit_message(self, data, chat_id):
+        message_id = data.get("message_id")
+        if not message_id:
+            await self.send_json(
+                {"type": "error", "message": "message_id is required"}
+            )
+            return
+        new_value = (data.get("data") or {}).get("value")
+        if new_value is None:
+            await self.send_json(
+                {"type": "error", "message": "data.value is required"}
+            )
+            return
+        new_value = new_value.strip() if isinstance(new_value, str) else ""
+        if not new_value:
+            await self.send_json(
+                {"type": "error", "message": "Message cannot be empty"}
+            )
+            return
+        chat_id = int(chat_id)
+        if not await self.user_in_chat(chat_id):
+            await self.send_json(
+                {"type": "error", "message": "Not a member of chat"}
+            )
+            return
+        updated_message = await self.update_message(message_id, self.user, new_value)
+        if not updated_message:
+            await self.send_json(
+                {"type": "error", "message": "Message not found or you cannot edit it"}
+            )
+            return
+        serialized = await self.serialize_message(updated_message, self.user)
+        await self.broadcast_to_chat_users(
+            chat_id,
+            "message_updated",
+            {"chat_id": chat_id, "data": serialized},
+        )
+
+    async def handle_delete_message(self, data, chat_id):
+        message_id = data.get("message_id")
+        if not message_id:
+            await self.send_json(
+                {"type": "error", "message": "message_id is required"}
+            )
+            return
+        chat_id = int(chat_id)
+        if not await self.user_in_chat(chat_id):
+            await self.send_json(
+                {"type": "error", "message": "Not a member of chat"}
+            )
+            return
+        deleted = await self.delete_message(message_id, self.user)
+        if not deleted:
+            await self.send_json(
+                {"type": "error", "message": "Message not found or you cannot delete it"}
+            )
+            return
+        await self.broadcast_to_chat_users(
+            chat_id,
+            "message_deleted",
+            {"chat_id": chat_id, "message_id": int(message_id)},
         )
 
     async def set_session_lifetime(self, data):
@@ -422,6 +489,43 @@ class AppConsumer(BaseConsumer):
             return None
 
     @database_sync_to_async
+    def update_message(self, message_id, user, new_value):
+        """Update message text if the user is the author. Returns updated message or None."""
+        try:
+            message = Message.objects.select_related("user", "user__profile", "reply_to").prefetch_related(
+                "file", "message_reactions"
+            ).filter(id=message_id).first()
+            if not message or message.user_id != user.id:
+                return None
+            message.value = new_value
+            message.edit_date = timezone.now()
+            message.save(update_fields=["value", "edit_date"])
+            return (
+                Message.objects.filter(id=message.id)
+                .select_related("user", "user__profile", "reply_to")
+                .prefetch_related("file", "message_reactions")
+                .first()
+            )
+        except Exception as e:
+            logger.error(f"Error updating message: {e}")
+            return None
+
+    @database_sync_to_async
+    def delete_message(self, message_id, user):
+        """Soft-delete message if the user is the author. Returns True on success."""
+        try:
+            message = Message.objects.filter(id=message_id).first()
+            if not message or message.user_id != user.id:
+                return False
+            message.is_deleted = True
+            message.value = None
+            message.save(update_fields=["is_deleted", "value"])
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting message: {e}")
+            return False
+
+    @database_sync_to_async
     def save_message(self, chat_id, user, message_content):
         try:
             chat = Chat.objects.get(id=chat_id)
@@ -493,6 +597,12 @@ class AppConsumer(BaseConsumer):
         await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
 
     async def chat_message(self, event):
+        await self.send_json(event)
+
+    async def message_updated(self, event):
+        await self.send_json(event)
+
+    async def message_deleted(self, event):
         await self.send_json(event)
 
     async def message_reaction(self, event):
