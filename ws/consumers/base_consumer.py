@@ -5,6 +5,7 @@ import traceback
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.contrib.auth import get_user_model
+from django.core.serializers.json import DjangoJSONEncoder
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import AccessToken, TokenError
 
@@ -101,6 +102,14 @@ class BaseConsumer(AsyncWebsocketConsumer):
             )
             return
 
+        if data.get("type") == "refresh_token":
+            try:
+                await self.handle_message(data)
+            except Exception as e:
+                logger.error("Error in handle_message: %s\n%s", e, traceback.format_exc())
+                await self.send_json({"type": "error", "message": "Internal server error"})
+            return
+
         if not self.scope.get("auth_valid") or not await self._is_session_active():
             await self.close(code=4003)
             return
@@ -166,4 +175,8 @@ class BaseConsumer(AsyncWebsocketConsumer):
         await self.send_group(f"session_{session_jti}", type_, **kwargs)
 
     async def send_json(self, data):
-        await self.send(text_data=json.dumps(data, ensure_ascii=False))
+        await self.send(
+            text_data=json.dumps(
+                data, ensure_ascii=False, cls=DjangoJSONEncoder
+            )
+        )

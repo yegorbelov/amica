@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,8 @@ from .serializers.serializers import ActiveSessionSerializer, UserSerializer
 from .utils.google_login_or_create_user import google_login_or_create_user
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 def create_refresh_token(user, session_lifetime_days):
@@ -81,7 +84,15 @@ def remember_session(user, refresh, request, old_jti=None):
         expires_at=expires_at,
     )
 
-    flush_expired_token.apply_async(args=[session.id], eta=expires_at)
+    try:
+        flush_expired_token.apply_async(args=[session.id], eta=expires_at)
+    except Exception as e:
+        logger.warning(
+            "Could not schedule flush_expired_token for session %s: %s",
+            session.id,
+            e,
+        )
+
     return session
 
 
@@ -133,6 +144,11 @@ def create_refresh_token_for_user(user):
     token = RefreshToken.for_user(user)
     token.set_exp(from_time=timezone.now(), lifetime=timedelta(days=lifetime_days))
     return token
+
+
+def get_new_access_token_for_user(user):
+    """Return a new access token string for the user (e.g. for WS refresh without rotation)."""
+    return str(create_refresh_token_for_user(user).access_token)
 
 
 @api_view(["POST"])

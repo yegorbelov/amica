@@ -22,6 +22,10 @@ from ..accounts.forms import *
 from .models import *
 from .serializers import *
 from .serializers import MessageSerializer
+from .services.get_chats_service import get_chats_list
+from .services.get_chat_service import get_chat_for_user
+from .services.get_contacts_service import get_contacts_for_user
+from .services.get_general_info_service import get_general_info_for_user
 from .utils import *
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
@@ -34,135 +38,8 @@ class GetChats(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-
-        last_message_subquery = Message.objects.filter(
-            chat_id=OuterRef("pk"), is_deleted=False
-        ).order_by("-date")
-        
-        member_count_subquery = (
-            ChatMember.objects
-            .filter(chat_id=OuterRef("pk"))
-            .values("chat")
-            .annotate(cnt=Count("id"))
-            .values("cnt")
-        )
-
-        chats_qs = (
-            Chat.objects.filter(users=user)
-            .annotate(
-                users_count=Subquery(member_count_subquery),
-                last_message_id=Subquery(last_message_subquery.values("id")[:1]),
-            )
-            .order_by("-created_at")
-            .prefetch_related(
-                Prefetch(
-                    "chatmember_set",
-                    queryset=ChatMember.objects.exclude(user=user).select_related(
-                        "user__profile"
-                    ),
-                    to_attr="other_members",
-                )
-            )
-        )
-
-        dialog_interlocutor_ids = [
-            member.user.id
-            for chat in chats_qs
-            if chat.is_dialog
-            for member in getattr(chat, "other_members", [])
-        ]
-
-        contacts_qs = Contact.objects.filter(
-            owner=user, user_id__in=dialog_interlocutor_ids
-        ).select_related("user")
-        contacts_map = {c.user_id: c for c in contacts_qs}
-
-        last_message_ids = [
-            chat.last_message_id for chat in chats_qs if chat.last_message_id
-        ]
-        recipients_prefetch = Prefetch(
-            "recipients",
-            queryset=MessageRecipient.objects.filter(
-                read_date__isnull=False
-            ),
-            to_attr="read_recipients",
-        )
-
-        messages_qs = (
-            Message.objects.filter(id__in=last_message_ids)
-            .select_related("user")
-            .prefetch_related("file", recipients_prefetch)
-        )
-        last_message_map = {m.chat_id: m for m in messages_qs}
-
-        ct_chat = ContentType.objects.get_for_model(Chat).id
-        ct_user = ContentType.objects.get_for_model(User).id
-        ct_contact = ContentType.objects.get_for_model(Contact).id
-        ct_profile = ContentType.objects.get_for_model(Profile).id
-
-        object_tuples = []
-        for chat in chats_qs:
-            object_tuples.append((ct_chat, chat.id))
-            if chat.is_dialog:
-                for member in getattr(chat, "other_members", []):
-                    interlocutor = member.user
-                    object_tuples.append((ct_user, interlocutor.id))
-                    profile = getattr(interlocutor, "profile", None)
-                    if profile:
-                        object_tuples.append((ct_profile, profile.id))
-                    if interlocutor.id in contacts_map:
-                        object_tuples.append(
-                            (ct_contact, contacts_map[interlocutor.id].id)
-                        )
-
-        media_map = {}
-        if object_tuples:
-            ctype_ids, object_ids = zip(*object_tuples)
-            media_qs = DisplayMedia.objects.filter(
-                is_primary=True, content_type_id__in=ctype_ids, object_id__in=object_ids
-            ).select_related("displayphoto", "displayvideo")
-            media_map = {(dm.content_type_id, dm.object_id): dm for dm in media_qs}
-
-        unread_map = dict(
-            MessageRecipient.objects.filter(
-                user=user, is_deleted=False, read_date__isnull=True
-            )
-            .exclude(message__user=user)
-            .values("message__chat_id")
-            .annotate(cnt=Count("id"))
-            .values_list("message__chat_id", "cnt")
-        )
-
-        for chat in chats_qs:
-            chat.last_message = last_message_map.get(chat.id)
-            chat.unread_count = unread_map.get(chat.id, 0)
-
-        serializer = ChatListSerializer(
-            chats_qs,
-            many=True,
-            context={
-                "request": request,
-                "media_map": media_map,
-                "contacts_map": contacts_map,
-                "ct_contact_id": ct_contact,
-                "ct_profile_id": ct_profile,
-                "ct_chat_id": ct_chat,
-                "interlocutors_map": {
-                    chat.id: (
-                        chat.other_members[0].user if chat.other_members else None
-                    )
-                    for chat in chats_qs
-                    if chat.is_dialog
-                },
-            },
-        )
-
-        # print("--- SQL Queries ---")
-        # for q in connection.queries:
-        #     print(q["sql"])
-
-        return Response({"chats": serializer.data}, status=200)
+        data = get_chats_list(request.user)
+        return Response(data, status=200)
 
 
 from rest_framework.response import Response
@@ -174,22 +51,7 @@ class GetChat(APIView):
 
     def get(self, request, chat_id):
         try:
-            chat = Chat.objects.prefetch_related(
-                "users",
-                "display_media",
-                "users__profile",
-                "users__profile__profile_media",
-                Prefetch(
-                    "messages",
-                    queryset=Message.objects.select_related("user")
-                    .prefetch_related("file")
-                    .order_by("date"),
-                ),
-            ).get(id=chat_id)
-
-            serializer = ChatSerializer(chat, context={"request": request})
-
-            response_data = serializer.data
+            response_data = get_chat_for_user(chat_id, request.user)
             response = Response(response_data, status=200)
             response["Content-Security-Policy"] = (
                 "default-src 'self'; "
@@ -202,9 +64,7 @@ class GetChat(APIView):
                 "base-uri 'self'; "
                 "form-action 'self';"
             )
-
             return response
-
         except Chat.DoesNotExist:
             response = Response({"error": "Chat not found"}, status=404)
             response["Content-Security-Policy"] = (
@@ -607,69 +467,21 @@ class MessageViewSet(viewsets.ViewSet):
 @permission_classes([IsAuthenticated])
 def get_general_info(request):
     logger.info("Getting general info", extra={"user_id": request.user.id})
-
     try:
-        user = (
-            CustomUser.objects.select_related("profile")
-            .prefetch_related(
-                Prefetch(
-                    "profile__profile_media",
-                    queryset=DisplayPhoto.objects.all(),
-                    to_attr="prefetched_photos",
-                ),
-                Prefetch(
-                    "profile__profile_media",
-                    queryset=DisplayVideo.objects.all(),
-                    to_attr="prefetched_videos",
-                ),
-            )
-            .get(pk=request.user.pk)
-        )
-
-        if not user:
-            logger.warning("User not found", extra={"user_id": request.user.id})
+        data = get_general_info_for_user(request.user)
+        if not data.get("success"):
             return Response(
-                {"success": False, "error": "User not found"},
+                {"success": False, "error": data.get("error", "Unknown")},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        profile = getattr(user, "profile", None)
-        active_wallpaper = None
-
-        if profile:
-            if profile.active_wallpaper:
-                active_wallpaper = WallpaperSerializer(
-                    profile.active_wallpaper,
-                    context={"request": request},
-                ).data
-            elif profile.default_wallpaper_id:
-                active_wallpaper = {"id": profile.default_wallpaper_id}
-            else:
-                active_wallpaper = {"id": "default-0"}
-
-        serializer = UserSerializer(user, context={"request": request})
-        # print("--- SQL Queries ---")
-        # for q in connection.queries:
-        #     print(f"{q['time']}s -> {q['sql']}")
-        return Response(
-            {
-                "success": True,
-                "user": serializer.data,
-                "active_wallpaper": active_wallpaper,
-            },
-            status=status.HTTP_200_OK,
-        )
-
+        return Response(data, status=status.HTTP_200_OK)
     except Exception:
         logger.exception(
             "Error in get_general_info",
             extra={"user_id": request.user.id},
         )
         return Response(
-            {
-                "success": False,
-                "error": "Internal server error",
-            },
+            {"success": False, "error": "Internal server error"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -728,46 +540,8 @@ User = get_user_model()
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def GetContacts(request):
-    user = request.user
-
-    contacts = (
-        Contact.objects.filter(owner=user)
-        .select_related("user", "user__profile")
-        .prefetch_related(
-            "display_media",
-            "user__profile__profile_media",
-        )
-    )
-
-    dialogs = (
-        Chat.objects.filter(chat_type=Chat.ChatType.DIALOG, users=user)
-        .prefetch_related(
-            Prefetch(
-                "users",
-                queryset=User.objects.only("id"),
-            )
-        )
-    )
-
-    dialog_map = {}
-    for chat in dialogs:
-        for u in chat.users.all():
-            if u.id != user.id:
-                dialog_map[u.id] = chat.id
-
-    serializer = ContactSerializer(
-        contacts,
-        many=True,
-        context={
-            "request": request,
-            "dialog_map": dialog_map,
-        },
-    )
-    # print("--- SQL Queries ---")
-    # for q in connection.queries:
-    #     print(q["sql"])
-
-    return Response({"contacts": serializer.data}, status=200)
+    data = get_contacts_for_user(request.user)
+    return Response(data, status=200)
 
 
 

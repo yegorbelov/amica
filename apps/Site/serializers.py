@@ -197,6 +197,9 @@ class ContactSerializer(serializers.ModelSerializer):
         ]
 
     def _get_current_user(self):
+        user = self.context.get("user")
+        if user is not None:
+            return user
         request = self.context.get("request")
         return getattr(request, "user", None)
 
@@ -348,6 +351,9 @@ class ChatListSerializer(serializers.ModelSerializer):
         return self._contact_cache[key]
 
     def _get_current_user(self):
+        user = self.context.get("user")
+        if user is not None:
+            return user
         request = self.context.get("request")
         return getattr(request, "user", None)
 
@@ -441,10 +447,14 @@ class ChatUserSerializer(serializers.ModelSerializer):
 
     def _get_contacts_cache(self):
         if not hasattr(self, "_contacts_cache"):
-            user = self.context["request"].user
-            self._contacts_cache = {
-                c.user_id: c for c in Contact.objects.filter(owner=user)
-            }
+            user = self.context.get("user") or getattr(
+                self.context.get("request"), "user", None
+            )
+            self._contacts_cache = (
+                {c.user_id: c for c in Contact.objects.filter(owner=user)}
+                if user
+                else {}
+            )
         return self._contacts_cache
 
     def get_is_contact(self, obj):
@@ -514,6 +524,9 @@ class ChatSerializer(serializers.ModelSerializer):
         return self._contact_cache[key]
 
     def _get_current_user(self):
+        user = self.context.get("user")
+        if user is not None:
+            return user
         request = self.context.get("request")
         return getattr(request, "user", None)
 
@@ -592,8 +605,8 @@ from urllib.parse import urljoin
 
 
 def build_absolute_url(path: str) -> str:
-    scheme = settings.SITE_SCHEME
-    domain = settings.SITE_DOMAIN
+    scheme = getattr(settings, "SITE_SCHEME", "http")
+    domain = getattr(settings, "SITE_DOMAIN", "localhost")
     base = f"{scheme}://{domain}"
     return urljoin(base, path)
 

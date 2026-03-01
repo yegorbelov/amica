@@ -4,8 +4,11 @@ import logging
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from django.utils import timezone
+from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.models import ActiveSession
 from apps.accounts.services.sessions import update_user_session_lifetime
+from apps.accounts.views import get_new_access_token_for_user
 from apps.Site.models import (
     Chat,
     Message,
@@ -15,6 +18,10 @@ from apps.Site.models import (
     Wallpaper,
 )
 from apps.Site.serializers import MessageSerializer
+from apps.Site.services.get_chats_service import get_chats_list
+from apps.Site.services.get_chat_service import get_chat_for_user
+from apps.Site.services.get_contacts_service import get_contacts_for_user
+from apps.Site.services.get_general_info_service import get_general_info_for_user
 from channels.layers import get_channel_layer
 
 from .base_consumer import BaseConsumer
@@ -50,6 +57,16 @@ class AppConsumer(BaseConsumer):
                 await self.handle_message_viewed(data)
             elif message_type == "set_session_lifetime":
                 await self.set_session_lifetime(data)
+            elif message_type == "get_chats":
+                await self.handle_get_chats()
+            elif message_type == "get_chat":
+                await self.handle_get_chat(data)
+            elif message_type == "get_general_info":
+                await self.handle_get_general_info()
+            elif message_type == "get_contacts":
+                await self.handle_get_contacts()
+            elif message_type == "refresh_token":
+                await self.handle_refresh_token()
             elif message_type == "add_user_wallpaper":
                 await self.handle_add_user_wallpaper(data)
             elif message_type == "set_active_wallpaper":
@@ -103,16 +120,7 @@ class AppConsumer(BaseConsumer):
             {"chat_id": chat_id, "data": serialized},
         )
 
-    @database_sync_to_async
-    def get_or_create_dialog(self, other_user_id):
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-
-        other_user = User.objects.get(id=other_user_id)
-        return Chat.get_or_create_direct_chat(self.user, other_user)
-
-    async def handle_message_reaction(self, data):
+    async def set_session_lifetime(self, data):
         message_id = data.get("message_id")
         if not message_id:
             return
@@ -165,6 +173,126 @@ class AppConsumer(BaseConsumer):
             self.user, days, current_refresh_token=token
         )
         await self.send_json({"type": "session_lifetime_updated", "days": days})
+
+    async def handle_get_chats(self):
+        try:
+            result = await database_sync_to_async(get_chats_list)(self.user)
+            await self.send_json({"type": "chats", "chats": result["chats"]})
+        except Exception as e:
+            logger.exception("get_chats failed: %s", e)
+            from django.conf import settings
+            message = str(e) if settings.DEBUG else "Failed to load chats"
+            await self.send_json({"type": "error", "message": message})
+
+    async def handle_get_chat(self, data):
+        chat_id = data.get("chat_id")
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+        try:
+            result = await database_sync_to_async(get_chat_for_user)(
+                chat_id, self.user
+            )
+            await self.send_json({"type": "chat", "chat_id": chat_id, **result})
+        except Chat.DoesNotExist:
+            await self.send_json(
+                {"type": "error", "message": "Chat not found"}
+            )
+        except Exception as e:
+            logger.exception("get_chat failed: %s", e)
+            from django.conf import settings
+            message = str(e) if settings.DEBUG else "Failed to load chat"
+            await self.send_json({"type": "error", "message": message})
+
+    async def handle_get_general_info(self):
+        try:
+            result = await database_sync_to_async(get_general_info_for_user)(
+                self.user
+            )
+            await self.send_json({"type": "general_info", **result})
+        except Exception as e:
+            logger.exception("get_general_info failed: %s", e)
+            from django.conf import settings
+            message = str(e) if settings.DEBUG else "Failed to load general info"
+            await self.send_json({"type": "error", "message": message})
+
+    async def handle_get_contacts(self):
+        try:
+            result = await database_sync_to_async(get_contacts_for_user)(
+                self.user
+            )
+            await self.send_json({"type": "contacts", **result})
+        except Exception as e:
+            logger.exception("get_contacts failed: %s", e)
+            from django.conf import settings
+            message = str(e) if settings.DEBUG else "Failed to load contacts"
+            await self.send_json({"type": "error", "message": message})
+
+    def _get_refresh_token_from_scope(self):
+        for key, value in self.scope.get("headers", []):
+            if key == b"cookie":
+                cookies = {}
+                for item in value.decode().split("; "):
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        cookies[k.strip()] = v.strip()
+                return cookies.get("refresh_token")
+        return None
+
+    async def handle_refresh_token(self):
+        token_str = self._get_refresh_token_from_scope()
+        if not token_str:
+            await self.send_json(
+                {"type": "error", "message": "No refresh token"}
+            )
+            return
+        try:
+            access = await database_sync_to_async(
+                self._refresh_access_from_refresh_token
+            )(token_str)
+            if access:
+                await self.send_json(
+                    {"type": "refresh_token_response", "access": access}
+                )
+            else:
+                await self.send_json(
+                    {"type": "error", "message": "Invalid refresh token"}
+                )
+        except Exception as e:
+            logger.exception("refresh_token failed: %s", e)
+            await self.send_json(
+                {"type": "error", "message": "Invalid refresh token"}
+            )
+
+    def _refresh_access_from_refresh_token(self, token_str):
+        from rest_framework_simplejwt.exceptions import TokenError
+
+        try:
+            old_refresh = RefreshToken(token_str)
+            user = ActiveSession.objects.get(
+                jti=str(old_refresh["jti"])
+            ).user
+            return get_new_access_token_for_user(user)
+        except (TokenError, KeyError, ActiveSession.DoesNotExist):
+            return None
+
+    @database_sync_to_async
+    def get_or_create_dialog(self, other_user_id):
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+
+        other_user = User.objects.get(id=other_user_id)
+        return Chat.get_or_create_direct_chat(self.user, other_user)
 
     async def user_in_chat(self, chat_id):
         user_ids = await self.get_chat_user_ids(chat_id)
