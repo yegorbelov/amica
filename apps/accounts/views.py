@@ -151,6 +151,13 @@ def get_new_access_token_for_user(user):
     return str(create_refresh_token_for_user(user).access_token)
 
 
+def get_access_token_for_session(session_jti, user):
+    """Return an access token string for the existing session (same jti). Used for WS connect with refresh cookie."""
+    refresh = create_refresh_token_for_user(user)
+    refresh.access_token["jti"] = session_jti
+    return str(refresh.access_token)
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):

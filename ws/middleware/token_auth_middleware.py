@@ -4,7 +4,11 @@ from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from rest_framework_simplejwt.tokens import AccessToken, TokenError
+from django.utils import timezone
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, TokenError
+
+from apps.accounts.models.models import ActiveSession
+from apps.accounts.views import get_access_token_for_session
 
 User = get_user_model()
 
@@ -14,6 +18,7 @@ class TokenAuthMiddleware(BaseMiddleware):
         scope["user"] = AnonymousUser()
         scope["auth_valid"] = False
         scope["access_jti"] = None
+        scope["issued_access_token"] = None
 
         token = self._get_token_from_scope(scope)
 
@@ -24,8 +29,45 @@ class TokenAuthMiddleware(BaseMiddleware):
                 scope["user"] = user
                 scope["auth_valid"] = True
                 scope["access_jti"] = jti
+        else:
+            refresh_str = self._get_refresh_token_from_scope(scope)
+            if refresh_str:
+                user_jti_and_access = await self._get_user_and_issue_access(
+                    refresh_str
+                )
+                if user_jti_and_access:
+                    user, jti, access = user_jti_and_access
+                    scope["user"] = user
+                    scope["auth_valid"] = True
+                    scope["access_jti"] = jti
+                    scope["issued_access_token"] = access
 
         return await super().__call__(scope, receive, send)
+
+    def _get_refresh_token_from_scope(self, scope):
+        for k, v in scope.get("headers", []):
+            if k == b"cookie":
+                cookies = dict(
+                    item.split("=", 1) for item in v.decode().split("; ") if "=" in item
+                )
+                return cookies.get("refresh_token")
+        return None
+
+    @database_sync_to_async
+    def _get_user_and_issue_access(self, refresh_str):
+        try:
+            refresh = RefreshToken(refresh_str)
+            jti = str(refresh["jti"])
+            session = ActiveSession.objects.filter(
+                jti=jti, expires_at__gt=timezone.now()
+            ).first()
+            if not session:
+                return None
+            user = session.user
+            access = get_access_token_for_session(jti, user)
+            return user, jti, access
+        except (TokenError, KeyError):
+            return None
 
     def _get_token_from_scope(self, scope):
         # query string ?token=xxx

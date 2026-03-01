@@ -36,15 +36,15 @@ class BaseConsumer(AsyncWebsocketConsumer):
             )
 
             await self.accept()
-            await self.send(
-                json.dumps(
-                    {
-                        "type": "connection_established",
-                        "user_id": self.user.id,
-                        "session_jti": self.session_jti,
-                    }
-                )
-            )
+            payload = {
+                "type": "connection_established",
+                "user_id": self.user.id,
+                "session_jti": self.session_jti,
+            }
+            issued = self.scope.get("issued_access_token")
+            if issued:
+                payload["access"] = issued
+            await self.send(json.dumps(payload))
         except Exception:
             logger.exception("WebSocket connect error")
             await self.close(code=4002)
