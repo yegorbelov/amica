@@ -174,12 +174,30 @@ class AppConsumer(BaseConsumer):
 
     async def handle_delete_message(self, data, chat_id):
         message_id = data.get("message_id")
-        if not message_id:
+        if message_id is None:
             await self.send_json(
                 {"type": "error", "message": "message_id is required"}
             )
             return
-        chat_id = int(chat_id)
+        try:
+            message_id = int(message_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "message_id must be a number"}
+            )
+            return
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
         if not await self.user_in_chat(chat_id):
             await self.send_json(
                 {"type": "error", "message": "Not a member of chat"}
@@ -194,7 +212,7 @@ class AppConsumer(BaseConsumer):
         await self.broadcast_to_chat_users(
             chat_id,
             "message_deleted",
-            {"chat_id": chat_id, "message_id": int(message_id)},
+            {"chat_id": chat_id, "message_id": message_id},
         )
 
     async def set_session_lifetime(self, data):

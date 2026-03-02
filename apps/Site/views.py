@@ -454,8 +454,11 @@ class MessageViewSet(viewsets.ViewSet):
     def destroy(self, request, pk=None):
         try:
             message = Message.objects.get(pk=pk, user=request.user)
+            chat_id = message.chat_id
             message.is_deleted = True
             message.save()
+            from .services.ws_sender import send_ws_message_deleted
+            send_ws_message_deleted(chat_id, message.id)
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Message.DoesNotExist:
             return Response(

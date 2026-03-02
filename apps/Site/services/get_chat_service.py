@@ -21,7 +21,8 @@ def get_chat_for_user(chat_id, user):
             "users__profile__profile_media",
             Prefetch(
                 "messages",
-                queryset=Message.objects.select_related("user")
+                queryset=Message.objects.filter(is_deleted=False)
+                .select_related("user")
                 .prefetch_related("file")
                 .order_by("date"),
             ),

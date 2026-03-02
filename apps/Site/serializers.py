@@ -48,7 +48,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # "reactions_summary",
             # "user_reaction",
             "is_own",
-            # "is_deleted",
+            "is_deleted",
             "edit_date",
             # "forwarded",
             # "reply_to",
@@ -59,6 +59,8 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_files(self, obj):
+        if getattr(obj, "is_deleted", False):
+            return []
         request = self.context.get("request")
         serialized_files = []
         for f in obj.file.all():
