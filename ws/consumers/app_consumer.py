@@ -126,13 +126,8 @@ class AppConsumer(BaseConsumer):
             )
 
         message = await self.save_message(chat_id, self.user, message_content)
-        serialized = await self.serialize_message(message, self.user)
 
-        await self.broadcast_to_chat_users(
-            chat_id,
-            "chat_message",
-            {"chat_id": chat_id, "data": serialized},
-        )
+        await self.broadcast_message_to_chat_users(chat_id, message)
 
     async def handle_edit_message(self, data, chat_id):
         message_id = data.get("message_id")
@@ -165,11 +160,8 @@ class AppConsumer(BaseConsumer):
                 {"type": "error", "message": "Message not found or you cannot edit it"}
             )
             return
-        serialized = await self.serialize_message(updated_message, self.user)
-        await self.broadcast_to_chat_users(
-            chat_id,
-            "message_updated",
-            {"chat_id": chat_id, "data": serialized},
+        await self.broadcast_message_event_to_chat_users(
+            chat_id, "message_updated", updated_message, chat_id=chat_id
         )
 
     async def handle_delete_message(self, data, chat_id):
@@ -232,11 +224,11 @@ class AppConsumer(BaseConsumer):
         if not updated_message:
             return
 
-        serialized = await self.serialize_message(updated_message, self.user)
-        await self.broadcast_to_chat_users(
+        await self.broadcast_message_event_to_chat_users(
             chat_id,
             "message_reaction",
-            {"message_id": message_id, "data": serialized},
+            updated_message,
+            message_id=message_id,
         )
 
     async def handle_message_viewed(self, data):
@@ -294,8 +286,20 @@ class AppConsumer(BaseConsumer):
             )
             return
         try:
+            cursor = data.get("cursor")
+            if cursor is not None:
+                try:
+                    cursor = int(cursor)
+                except (TypeError, ValueError):
+                    cursor = None
+            page_size = data.get("page_size", 25)
+            if not isinstance(page_size, int):
+                try:
+                    page_size = int(page_size) if page_size is not None else 25
+                except (TypeError, ValueError):
+                    page_size = 25
             result = await database_sync_to_async(get_chat_for_user)(
-                chat_id, self.user
+                chat_id, self.user, cursor=cursor, page_size=page_size
             )
             await self.send_json({"type": "chat", "chat_id": chat_id, **result})
         except Chat.DoesNotExist:
@@ -600,6 +604,12 @@ class AppConsumer(BaseConsumer):
         return serializer.data
 
     @database_sync_to_async
+    def serialize_message_for_recipient(self, message, recipient_id):
+        """Serialize message so is_own is True only for the recipient who is the author."""
+        serializer = MessageSerializer(message, context={"user_id": recipient_id})
+        return serializer.data
+
+    @database_sync_to_async
     def serialize_chat(self, chat):
         serializer = ChatListSerializer(chat)
         return serializer.data
@@ -611,6 +621,46 @@ class AppConsumer(BaseConsumer):
         async def send_to_user(user_id):
             async with semaphore:
                 await self.send_to_user_group(user_id, event_type, **payload)
+
+        await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
+
+    async def broadcast_message_to_chat_users(self, chat_id, message):
+        """Send chat_message to each chat user with message serialized per recipient (is_own correct for each)."""
+        user_ids = await self.get_chat_user_ids(chat_id)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_to_user(recipient_id):
+            async with semaphore:
+                serialized = await self.serialize_message_for_recipient(
+                    message, recipient_id
+                )
+                await self.send_to_user_group(
+                    recipient_id,
+                    "chat_message",
+                    chat_id=chat_id,
+                    data=serialized,
+                )
+
+        await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
+
+    async def broadcast_message_event_to_chat_users(
+        self, chat_id, event_type, message, **payload_extra
+    ):
+        """Broadcast an event containing a serialized message, with is_own correct per recipient."""
+        user_ids = await self.get_chat_user_ids(chat_id)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_to_user(recipient_id):
+            async with semaphore:
+                serialized = await self.serialize_message_for_recipient(
+                    message, recipient_id
+                )
+                await self.send_to_user_group(
+                    recipient_id,
+                    event_type,
+                    data=serialized,
+                    **payload_extra,
+                )
 
         await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
 

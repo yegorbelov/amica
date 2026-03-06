@@ -50,8 +50,24 @@ class GetChat(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, chat_id):
+        cursor = request.GET.get("cursor")
+        if cursor is not None:
+            try:
+                cursor = int(cursor)
+            except (TypeError, ValueError):
+                cursor = None
+        page_size = request.GET.get("page_size")
+        if page_size is not None:
+            try:
+                page_size = int(page_size)
+            except (TypeError, ValueError):
+                page_size = 25
+        else:
+            page_size = 25
         try:
-            response_data = get_chat_for_user(chat_id, request.user)
+            response_data = get_chat_for_user(
+                chat_id, request.user, cursor=cursor, page_size=page_size
+            )
             response = Response(response_data, status=200)
             response["Content-Security-Policy"] = (
                 "default-src 'self'; "
