@@ -292,6 +292,12 @@ class AppConsumer(BaseConsumer):
                     cursor = int(cursor)
                 except (TypeError, ValueError):
                     cursor = None
+            cursor_newer = data.get("cursor_newer")
+            if cursor_newer is not None:
+                try:
+                    cursor_newer = int(cursor_newer)
+                except (TypeError, ValueError):
+                    cursor_newer = None
             page_size = data.get("page_size", 25)
             if not isinstance(page_size, int):
                 try:
@@ -299,7 +305,11 @@ class AppConsumer(BaseConsumer):
                 except (TypeError, ValueError):
                     page_size = 25
             result = await database_sync_to_async(get_chat_for_user)(
-                chat_id, self.user, cursor=cursor, page_size=page_size
+                chat_id,
+                self.user,
+                cursor=cursor,
+                cursor_newer=cursor_newer,
+                page_size=page_size,
             )
             await self.send_json({"type": "chat", "chat_id": chat_id, **result})
         except Chat.DoesNotExist:

@@ -56,6 +56,12 @@ class GetChat(APIView):
                 cursor = int(cursor)
             except (TypeError, ValueError):
                 cursor = None
+        cursor_newer = request.GET.get("cursor_newer")
+        if cursor_newer is not None:
+            try:
+                cursor_newer = int(cursor_newer)
+            except (TypeError, ValueError):
+                cursor_newer = None
         page_size = request.GET.get("page_size")
         if page_size is not None:
             try:
@@ -66,7 +72,11 @@ class GetChat(APIView):
             page_size = 25
         try:
             response_data = get_chat_for_user(
-                chat_id, request.user, cursor=cursor, page_size=page_size
+                chat_id,
+                request.user,
+                cursor=cursor,
+                cursor_newer=cursor_newer,
+                page_size=page_size,
             )
             response = Response(response_data, status=200)
             response["Content-Security-Policy"] = (
