@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from asgiref.sync import sync_to_async
@@ -23,7 +24,7 @@ from apps.Site.models import (
     UserWallpaper,
     Wallpaper,
 )
-from apps.Site.serializers import MessageSerializer
+from apps.Site.serializers import ChatListSerializer, ChatUserSerializer, MessageSerializer
 from apps.Site.services.get_chats_service import get_chats_list
 from apps.Site.services.get_chat_service import get_chat_for_user
 from apps.Site.services.get_contacts_service import get_contacts_for_user
@@ -47,7 +48,15 @@ class AppConsumer(BaseConsumer):
         chat_id = data.get("chat_id")
 
         if (
-            message_type in ("chat_message", "message_reaction", "message_viewed", "edit_message", "delete_message")
+            message_type
+            in (
+                "chat_message",
+                "message_reaction",
+                "message_viewed",
+                "edit_message",
+                "delete_message",
+                "delete_chat",
+            )
             and not chat_id
         ):
             return await self.send_json(
@@ -61,6 +70,8 @@ class AppConsumer(BaseConsumer):
                 await self.handle_edit_message(data, data.get("chat_id"))
             elif message_type == "delete_message":
                 await self.handle_delete_message(data, data.get("chat_id"))
+            elif message_type == "delete_chat":
+                await self.handle_delete_chat(data, data.get("chat_id"))
             elif message_type == "message_reaction":
                 await self.handle_message_reaction(data)
             elif message_type == "message_viewed":
@@ -101,24 +112,32 @@ class AppConsumer(BaseConsumer):
                 {"type": "error", "message": "Message cannot be empty"}
             )
 
-        if chat_id <= 0:
+        try:
+            chat_id = int(chat_id) if chat_id is not None else None
+        except (TypeError, ValueError):
+            chat_id = None
+
+        temp_chat_id_for_event = None
+        if chat_id is not None and chat_id <= 0:
             if not other_user_id:
                 return await self.send_json(
                     {"type": "error", "message": "user_id required"}
                 )
+            try:
+                other_user_id = int(other_user_id)
+            except (TypeError, ValueError):
+                return await self.send_json(
+                    {"type": "error", "message": "user_id must be a number"}
+                )
 
+            temp_chat_id_for_event = chat_id
             chat, created = await self.get_or_create_dialog(other_user_id)
-
-            await self.broadcast_to_chat_users(
-                chat.id,
-                "chat_created",
-                {
-                    "temp_chat_id": chat_id,
-                    "chat": await self.serialize_chat(chat),
-                },
-            )
-
             chat_id = chat.id
+
+        if chat_id is None:
+            return await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
 
         if not await self.user_in_chat(chat_id):
             return await self.send_json(
@@ -126,6 +145,25 @@ class AppConsumer(BaseConsumer):
             )
 
         message = await self.save_message(chat_id, self.user, message_content)
+        if not message:
+            return await self.send_json(
+                {"type": "error", "message": "Failed to save message"}
+            )
+
+        # New-dialog flow: send chat_created after saving message so payload includes last_message
+        if temp_chat_id_for_event is not None:
+            user_ids = await self.get_chat_user_ids(chat_id)
+            base_chat = await self.serialize_chat(chat)
+            for uid in user_ids:
+                last_msg = await self.serialize_message_for_recipient(message, uid)
+                payload = {
+                    "temp_chat_id": temp_chat_id_for_event,
+                    "chat": {**base_chat, "last_message": last_msg},
+                }
+                payload_safe = json.loads(
+                    json.dumps(payload, default=str)
+                )
+                await self.send_to_user_group(uid, "chat_created", **payload_safe)
 
         await self.broadcast_message_to_chat_users(chat_id, message)
 
@@ -206,6 +244,38 @@ class AppConsumer(BaseConsumer):
             "message_deleted",
             {"chat_id": chat_id, "message_id": message_id},
         )
+
+    async def handle_delete_chat(self, data, chat_id):
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+
+        if not await self.user_in_chat(chat_id):
+            await self.send_json(
+                {"type": "error", "message": "Not a member of chat"}
+            )
+            return
+
+        user_ids = await self.get_chat_user_ids(chat_id)
+        deleted = await self.delete_chat(chat_id, self.user)
+        if not deleted:
+            await self.send_json(
+                {"type": "error", "message": "Chat not found or cannot be deleted"}
+            )
+            return
+
+        payload = {"chat_id": chat_id}
+        for user_id in user_ids:
+            await self.send_to_user_group(user_id, "chat_deleted", **payload)
 
     async def set_session_lifetime(self, data):
         message_id = data.get("message_id")
@@ -558,6 +628,19 @@ class AppConsumer(BaseConsumer):
             return False
 
     @database_sync_to_async
+    def delete_chat(self, chat_id, user):
+        try:
+            chat = Chat.objects.filter(id=chat_id, users=user).first()
+            if not chat:
+                return False
+            chat.delete()
+            self.chat_users_cache.pop(chat_id, None)
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting chat: {e}")
+            return False
+
+    @database_sync_to_async
     def save_message(self, chat_id, user, message_content):
         try:
             chat = Chat.objects.get(id=chat_id)
@@ -621,8 +704,21 @@ class AppConsumer(BaseConsumer):
 
     @database_sync_to_async
     def serialize_chat(self, chat):
-        serializer = ChatListSerializer(chat)
-        return serializer.data
+        """Serialize chat for chat_created event. Includes members and safe context for single chat."""
+        context = {
+            "user": self.user,
+            "user_id": self.user.id,
+            "interlocutors_map": {chat.pk: chat.get_interlocutor(self.user)},
+            "contacts_map": {},
+            "media_map": {},
+        }
+        list_data = ChatListSerializer(chat, context=context).data
+        # ChatListSerializer does not include members; frontend expects them
+        other_users = list(chat.users.exclude(pk=self.user.pk))
+        list_data["members"] = ChatUserSerializer(
+            other_users, many=True, context=context
+        ).data
+        return list_data
 
     async def broadcast_to_chat_users(self, chat_id, event_type, payload):
         user_ids = await self.get_chat_user_ids(chat_id)
@@ -682,6 +778,14 @@ class AppConsumer(BaseConsumer):
 
     async def message_deleted(self, event):
         await self.send_json(event)
+
+    async def chat_deleted(self, event):
+        await self.send_json(
+            {
+                "type": "chat_deleted",
+                "chat_id": event.get("chat_id"),
+            }
+        )
 
     async def message_reaction(self, event):
         await self.send_json(event)
