@@ -201,6 +201,13 @@ class AppConsumer(BaseConsumer):
         await self.broadcast_message_event_to_chat_users(
             chat_id, "message_updated", updated_message, chat_id=chat_id
         )
+        # Ensure editor gets message_updated on this connection (broadcast may be delayed)
+        serialized_self = await self.serialize_message_for_recipient(
+            updated_message, self.user.id
+        )
+        await self.send_json(
+            {"type": "message_updated", "chat_id": chat_id, "data": serialized_self}
+        )
 
     async def handle_delete_message(self, data, chat_id):
         message_id = data.get("message_id")
@@ -750,10 +757,11 @@ class AppConsumer(BaseConsumer):
         await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
 
     async def broadcast_message_event_to_chat_users(
-        self, chat_id, event_type, message, **payload_extra
+        self, chat, event_type, message, **payload_extra
     ):
         """Broadcast an event containing a serialized message, with is_own correct per recipient."""
-        user_ids = await self.get_chat_user_ids(chat_id)
+        user_ids = await self.get_chat_user_ids(chat)
+        channel_layer = get_channel_layer()
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
 
         async def send_to_user(recipient_id):
@@ -761,11 +769,16 @@ class AppConsumer(BaseConsumer):
                 serialized = await self.serialize_message_for_recipient(
                     message, recipient_id
                 )
-                await self.send_to_user_group(
-                    recipient_id,
-                    event_type,
-                    data=serialized,
-                    **payload_extra,
+                payload = {"type": event_type, "data": serialized, **payload_extra}
+                try:
+                    payload_safe = json.loads(
+                        json.dumps(payload, default=str)
+                    )
+                except (TypeError, ValueError):
+                    payload_safe = payload
+                await channel_layer.group_send(
+                    f"user_{recipient_id}",
+                    payload_safe,
                 )
 
         await asyncio.gather(*(send_to_user(uid) for uid in user_ids))
