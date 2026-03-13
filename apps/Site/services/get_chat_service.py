@@ -1,6 +1,7 @@
 """Service to build single chat with messages for a user. Used by GetChat API and WebSocket get_chat."""
 
-from apps.Site.models import Chat, Message
+from django.db.models import Prefetch
+from apps.Site.models import Chat, Message, MessageRecipient
 from apps.Site.serializers import ChatSerializer
 
 PAGE_SIZE = 25
@@ -33,12 +34,17 @@ def get_chat_for_user(
         raise Chat.DoesNotExist("Chat not found")
 
     if cursor_newer is not None:
+        recipients_prefetch = Prefetch(
+            "recipients",
+            queryset=MessageRecipient.objects.filter(read_date__isnull=False),
+            to_attr="read_recipients",
+        )
         messages_qs = (
             Message.objects.filter(
                 chat_id=chat_id, is_deleted=False, id__gt=cursor_newer
             )
             .select_related("user")
-            .prefetch_related("file")
+            .prefetch_related("file", recipients_prefetch, "message_reactions")
             .order_by("date")
         )
         messages = list(messages_qs[:page_size])
@@ -47,10 +53,15 @@ def get_chat_for_user(
         )
         next_cursor = None
     else:
+        recipients_prefetch = Prefetch(
+            "recipients",
+            queryset=MessageRecipient.objects.filter(read_date__isnull=False),
+            to_attr="read_recipients",
+        )
         messages_qs = (
             Message.objects.filter(chat_id=chat_id, is_deleted=False)
             .select_related("user")
-            .prefetch_related("file")
+            .prefetch_related("file", recipients_prefetch, "message_reactions")
             .order_by("-date")
         )
         if cursor is not None:

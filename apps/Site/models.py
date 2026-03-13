@@ -221,7 +221,7 @@ class MessageReaction(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ["message", "user"]
+        unique_together = ["message", "user", "reaction_type"]
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -282,21 +282,39 @@ class Message(models.Model):
     def is_viewed_by_user(self, user):
         return self.recipients.filter(user=user, read_date__isnull=False).exists()
 
+    def get_user_reactions(self, user):
+        return list(
+            self.message_reactions.filter(user=user).values_list("reaction_type", flat=True)
+        )
+
     def get_user_reaction(self, user):
-        try:
-            return self.message_reactions.get(user=user).reaction_type
-        except MessageReaction.DoesNotExist:
-            return None
+        reactions = self.get_user_reactions(user)
+        return reactions[0] if reactions else None
 
     def set_user_reaction(self, user, reaction_type):
         if reaction_type is None:
             self.message_reactions.filter(user=user).delete()
-            return None
+            return []
         else:
-            reaction, created = MessageReaction.objects.update_or_create(
-                message=self, user=user, defaults={"reaction_type": reaction_type}
-            )
-            return reaction_type
+            existing = self.message_reactions.filter(
+                user=user, reaction_type=reaction_type
+            ).first()
+            if existing:
+                existing.delete()
+            else:
+                current_count = self.message_reactions.filter(user=user).count()
+                if current_count >= 3:
+                    oldest = (
+                        self.message_reactions.filter(user=user)
+                        .order_by("created_at", "id")
+                        .first()
+                    )
+                    if oldest:
+                        oldest.delete()
+                MessageReaction.objects.create(
+                    message=self, user=user, reaction_type=reaction_type
+                )
+            return self.get_user_reactions(user)
 
     def mark_as_viewed(self, user):
         if user == self.user:

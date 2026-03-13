@@ -76,7 +76,7 @@ def get_chats_list(user):
     messages_qs = (
         Message.objects.filter(id__in=last_message_ids)
         .select_related("user")
-        .prefetch_related("file", recipients_prefetch)
+        .prefetch_related("file", recipients_prefetch, "message_reactions")
     )
     last_message_map = {m.chat_id: m for m in messages_qs}
 

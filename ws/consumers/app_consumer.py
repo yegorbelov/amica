@@ -284,21 +284,41 @@ class AppConsumer(BaseConsumer):
         for user_id in user_ids:
             await self.send_to_user_group(user_id, "chat_deleted", **payload)
 
-    async def set_session_lifetime(self, data):
+    async def handle_message_reaction(self, data):
         message_id = data.get("message_id")
         if not message_id:
+            await self.send_json(
+                {"type": "error", "message": "message_id is required"}
+            )
             return
 
         reaction_type = data.get("data", {}).get("reaction_type")
+        valid_reactions = {
+            choice[0] for choice in MessageReaction.REACTION_TYPES
+        }
+        if reaction_type not in valid_reactions:
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": f"Invalid reaction_type. Allowed: {', '.join(sorted(valid_reactions))}",
+                }
+            )
+            return
 
         chat_id = await self.get_message_chat_id(message_id)
         if not chat_id or not await self.user_in_chat(chat_id):
+            await self.send_json(
+                {"type": "error", "message": "Message not found or no access"}
+            )
             return
 
-        updated_message = await self.update_message_reaction(
+        updated_message, error_message = await self.update_message_reaction(
             message_id, self.user, reaction_type
         )
-        if not updated_message:
+        if error_message:
+            await self.send_json(
+                {"type": "error", "message": error_message}
+            )
             return
 
         await self.broadcast_message_event_to_chat_users(
@@ -306,6 +326,9 @@ class AppConsumer(BaseConsumer):
             "message_reaction",
             updated_message,
             message_id=message_id,
+            chat_id=chat_id,
+            reaction_type=reaction_type,
+            actor_user_id=self.user.id,
         )
 
     async def handle_message_viewed(self, data):
@@ -669,20 +692,21 @@ class AppConsumer(BaseConsumer):
         try:
             message = Message.objects.filter(id=message_id).first()
             if not message:
-                return None
-
-            if reaction_type is None:
-                MessageReaction.objects.filter(message=message, user=user).delete()
-            else:
-                MessageReaction.objects.update_or_create(
-                    message=message,
-                    user=user,
-                    defaults={"reaction_type": reaction_type},
-                )
-            return Message.objects.filter(id=message_id).first()
+                return None, "Message not found"
+            try:
+                message.set_user_reaction(user, reaction_type)
+            except ValueError as e:
+                return None, str(e)
+            updated = (
+                Message.objects.filter(id=message_id)
+                .select_related("user", "user__profile", "reply_to")
+                .prefetch_related("file", "message_reactions")
+                .first()
+            )
+            return updated, None
         except Exception as e:
             logger.error(f"Error updating message reaction: {e}")
-            return None
+            return None, "Failed to update reaction"
 
     @database_sync_to_async
     def mark_message_as_viewed(self, message_id, user):

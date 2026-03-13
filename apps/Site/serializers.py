@@ -28,8 +28,9 @@ class UserMessageSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     user = UserMessageSerializer(read_only=True)
     files = serializers.SerializerMethodField()
-    # reactions_summary = serializers.SerializerMethodField()
-    # user_reaction = serializers.SerializerMethodField()
+    reactions_summary = serializers.SerializerMethodField()
+    user_reactions = serializers.SerializerMethodField()
+    user_reaction = serializers.SerializerMethodField()
     is_own = serializers.SerializerMethodField()
     # reply_to_message = serializers.SerializerMethodField()
     # view_count = serializers.SerializerMethodField()
@@ -45,8 +46,9 @@ class MessageSerializer(serializers.ModelSerializer):
             "user",
             # "chat",
             "files",
-            # "reactions_summary",
-            # "user_reaction",
+            "reactions_summary",
+            "user_reactions",
+            "user_reaction",
             "is_own",
             "is_deleted",
             "edit_date",
@@ -79,6 +81,13 @@ class MessageSerializer(serializers.ModelSerializer):
     def get_is_viewed(self, obj):
         return bool(getattr(obj, "read_recipients", []))
 
+    def _get_current_user_id(self):
+        request = self.context.get("request")
+        if request and request.user.is_authenticated:
+            return request.user.id
+        user_id = self.context.get("user_id")
+        return user_id
+
     def get_reactions_summary(self, obj):
         from collections import Counter
 
@@ -95,14 +104,19 @@ class MessageSerializer(serializers.ModelSerializer):
             for reaction_type, count in reaction_counts.items()
         ]
 
+    def get_user_reactions(self, obj):
+        user_id = self._get_current_user_id()
+        if not user_id:
+            return []
+        return [
+            item.reaction_type
+            for item in obj.message_reactions.all()
+            if item.user_id == user_id
+        ]
+
     def get_user_reaction(self, obj):
-        request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            try:
-                return obj.message_reactions.get(user=request.user).reaction_type
-            except MessageReaction.DoesNotExist:
-                return None
-        return None
+        reactions = self.get_user_reactions(obj)
+        return reactions[0] if reactions else None
 
     def get_is_own(self, obj):
         request = self.context.get("request")

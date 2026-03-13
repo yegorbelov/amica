@@ -120,7 +120,7 @@ class GetMessagesAPIView(APIView):
             messages_qs = (
                 chat.messages.filter(is_deleted=False)
                 .select_related("user", "user__profile", "reply_to")
-                .prefetch_related("file", recipients_prefetch)
+                .prefetch_related("file", recipients_prefetch, "message_reactions")
                 .order_by("-date")
             )
             if cursor_id:
@@ -154,7 +154,7 @@ class MessageReactionView(APIView):
             reaction_type = request.data.get("reaction_type")
 
             valid_reactions = [choice[0] for choice in MessageReaction.REACTION_TYPES]
-            if reaction_type not in valid_reactions and reaction_type is not None:
+            if reaction_type not in valid_reactions:
                 return Response(
                     {"error": f"Invalid reaction type. Valid types: {valid_reactions}"},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -164,13 +164,15 @@ class MessageReactionView(APIView):
 
             serializer = MessageSerializer(message, context={"request": request})
             return Response(
-                {"success": True, "user_reaction": result, "message": serializer.data}
+                {"success": True, "user_reactions": result, "message": serializer.data}
             )
 
         except Message.DoesNotExist:
             return Response(
                 {"error": "Message not found"}, status=status.HTTP_404_NOT_FOUND
             )
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Error in MessageReactionView: {str(e)}")
             return Response(
@@ -331,7 +333,7 @@ class MessageViewSet(viewsets.ViewSet):
         return (
             Message.objects.filter(chat_id=chat_id, is_deleted=False)
             .select_related("user", "user__profile")
-            .prefetch_related("file")
+            .prefetch_related("file", "message_reactions")
         )
 
     def retrieve(self, request, pk=None):
