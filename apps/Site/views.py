@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from mimetypes import guess_type
@@ -26,6 +27,8 @@ from .services.get_chats_service import get_chats_list
 from .services.get_chat_service import get_chat_for_user
 from .services.get_contacts_service import get_contacts_for_user
 from .services.get_general_info_service import get_general_info_for_user
+from .services.create_group_service import create_group_and_serialize
+from .services.search_groups_service import search_groups_globally_for_user
 from .utils import *
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
@@ -593,6 +596,83 @@ class UserEmailSearchView(APIView):
         serializer = UserSerializer(users, many=True, context={"request": request})
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class GroupSearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        q = request.query_params.get("q", "").strip()
+        if len(q) < 1:
+            return Response(
+                {"error": "Enter at least 1 character"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            limit = int(request.query_params.get("limit", 40))
+        except (TypeError, ValueError):
+            limit = 40
+        data = search_groups_globally_for_user(request.user, q, limit=limit)
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class CreateGroupView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        raw = request.data.get("name")
+        if raw is None:
+            return Response(
+                {"error": "name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = str(raw).strip()
+        try:
+            serialized = create_group_and_serialize(request.user, name)
+        except ValueError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception("CreateGroupView failed")
+            return Response(
+                {"error": "Failed to create group"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            channel_layer = get_channel_layer()
+            payload_safe = json.loads(json.dumps({"chat": serialized}, default=str))
+            async_to_sync(channel_layer.group_send)(
+                f"user_{request.user.id}",
+                {"type": "chat_created", **payload_safe},
+            )
+        except Exception as e:
+            logger.error("Channels error on create group: %s", e)
+
+        return Response({"chat": serialized}, status=status.HTTP_201_CREATED)
+
+
+class JoinGroupView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, chat_id):
+        try:
+            chat = Chat.objects.get(
+                id=chat_id, chat_type=Chat.ChatType.GROUP
+            )
+        except Chat.DoesNotExist:
+            return Response(
+                {"error": "Group not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        ChatMember.objects.get_or_create(
+            chat=chat,
+            user=request.user,
+            defaults={"role": ChatMember.Role.MEMBER},
+        )
+        return Response({"ok": True}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])

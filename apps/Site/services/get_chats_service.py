@@ -18,10 +18,13 @@ from apps.Site.serializers import ChatListSerializer
 User = get_user_model()
 
 
-def get_chats_list(user):
+def get_chats_list(user, chat_ids=None):
     """
     Return {"chats": [...]} for the given user.
     Same data as GetChats API; context uses user (no request) for serializer.
+
+    chat_ids: optional list of chat primary keys to restrict results (e.g. one id
+    after being added to a group).
     """
     last_message_subquery = Message.objects.filter(
         chat_id=OuterRef("pk"), is_deleted=False
@@ -51,6 +54,8 @@ def get_chats_list(user):
             )
         )
     )
+    if chat_ids is not None:
+        chats_qs = chats_qs.filter(id__in=chat_ids)
 
     dialog_interlocutor_ids = [
         member.user.id

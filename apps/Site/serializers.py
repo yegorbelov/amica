@@ -201,6 +201,7 @@ class ContactSerializer(serializers.ModelSerializer):
         model = Contact
         fields = [
             "id",
+            "user_id",
             # "user",
             "name",
             "avatar",
@@ -209,7 +210,7 @@ class ContactSerializer(serializers.ModelSerializer):
             "is_favorite",
             "created_at",
             "chat_id",
-            "last_seen"
+            "last_seen",
         ]
 
     def _get_current_user(self):

@@ -4,6 +4,7 @@ import logging
 
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -18,6 +19,7 @@ from apps.accounts.views import (
 )
 from apps.Site.models import (
     Chat,
+    ChatMember,
     Message,
     MessageReaction,
     MessageRecipient,
@@ -28,6 +30,7 @@ from apps.Site.serializers import ChatListSerializer, ChatUserSerializer, Messag
 from apps.Site.services.get_chats_service import get_chats_list
 from apps.Site.services.get_chat_service import get_chat_for_user
 from apps.Site.services.get_contacts_service import get_contacts_for_user
+from apps.Site.services.create_group_service import create_group_and_serialize
 from apps.Site.services.get_general_info_service import get_general_info_for_user
 from channels.layers import get_channel_layer
 
@@ -56,6 +59,8 @@ class AppConsumer(BaseConsumer):
                 "edit_message",
                 "delete_message",
                 "delete_chat",
+                "add_group_member",
+                "remove_group_member",
             )
             and not chat_id
         ):
@@ -72,6 +77,10 @@ class AppConsumer(BaseConsumer):
                 await self.handle_delete_message(data, data.get("chat_id"))
             elif message_type == "delete_chat":
                 await self.handle_delete_chat(data, data.get("chat_id"))
+            elif message_type == "add_group_member":
+                await self.handle_add_group_member(data, data.get("chat_id"))
+            elif message_type == "remove_group_member":
+                await self.handle_remove_group_member(data, data.get("chat_id"))
             elif message_type == "message_reaction":
                 await self.handle_message_reaction(data)
             elif message_type == "message_viewed":
@@ -98,6 +107,8 @@ class AppConsumer(BaseConsumer):
                 await self.handle_set_active_wallpaper(data)
             elif message_type == "delete_user_wallpaper":
                 await self.handle_delete_user_wallpaper(data)
+            elif message_type == "create_group":
+                await self.handle_create_group(data)
             else:
                 logger.warning(f"Unknown message type: {message_type}")
         except Exception as e:
@@ -283,6 +294,142 @@ class AppConsumer(BaseConsumer):
         payload = {"chat_id": chat_id}
         for user_id in user_ids:
             await self.send_to_user_group(user_id, "chat_deleted", **payload)
+
+    async def handle_add_group_member(self, data, chat_id):
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+
+        new_user_id = (data.get("data") or {}).get("user_id")
+        if new_user_id is None:
+            await self.send_json(
+                {"type": "error", "message": "user_id is required"}
+            )
+            return
+        try:
+            new_user_id = int(new_user_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "user_id must be a number"}
+            )
+            return
+
+        err = await self.try_add_group_member(chat_id, new_user_id)
+        if err:
+            await self.send_json({"type": "error", "message": err})
+            return
+
+        user_ids = await self.get_chat_user_ids(chat_id)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_one(uid):
+            async with semaphore:
+                body = await self.build_group_members_updated_event(
+                    chat_id, uid, new_user_id
+                )
+                payload_safe = json.loads(json.dumps(body, default=str))
+                await self.send_to_user_group(
+                    uid,
+                    "group_members_updated",
+                    **payload_safe,
+                )
+
+        await asyncio.gather(*(send_one(uid) for uid in user_ids))
+
+    async def handle_remove_group_member(self, data, chat_id):
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+
+        target_user_id = (data.get("data") or {}).get("user_id")
+        if target_user_id is None:
+            await self.send_json(
+                {"type": "error", "message": "user_id is required"}
+            )
+            return
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "user_id must be a number"}
+            )
+            return
+
+        err, payload = await self.try_remove_group_member(chat_id, target_user_id)
+        if err:
+            await self.send_json({"type": "error", "message": err})
+            return
+
+        removed_id = payload["removed_id"]
+        remaining_ids = payload["remaining_ids"]
+
+        await self.send_to_user_group(removed_id, "chat_deleted", chat_id=chat_id)
+
+        if not remaining_ids:
+            return
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_one(uid):
+            async with semaphore:
+                body = await self.build_group_members_updated_event(
+                    chat_id, uid, None
+                )
+                payload_safe = json.loads(json.dumps(body, default=str))
+                await self.send_to_user_group(
+                    uid,
+                    "group_members_updated",
+                    **payload_safe,
+                )
+
+        await asyncio.gather(*(send_one(uid) for uid in remaining_ids))
+
+    async def handle_create_group(self, data):
+        raw = (data.get("data") or {}).get("name")
+        if raw is None:
+            await self.send_json(
+                {"type": "error", "message": "name is required"}
+            )
+            return
+        name = str(raw).strip()
+        try:
+            serialized = await database_sync_to_async(create_group_and_serialize)(
+                self.user, name
+            )
+            chat_id = serialized["id"]
+            self.chat_users_cache[chat_id] = [self.user.id]
+            payload_safe = json.loads(json.dumps({"chat": serialized}, default=str))
+            await self.send_to_user_group(
+                self.user.id, "chat_created", **payload_safe
+            )
+        except ValueError as e:
+            await self.send_json({"type": "error", "message": str(e)})
+        except Exception as e:
+            logger.exception("create_group failed: %s", e)
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Failed to create group",
+                }
+            )
 
     async def handle_message_reaction(self, data):
         message_id = data.get("message_id")
@@ -590,9 +737,91 @@ class AppConsumer(BaseConsumer):
         )
 
     @database_sync_to_async
-    def get_or_create_dialog(self, other_user_id):
-        from django.contrib.auth import get_user_model
+    def try_add_group_member(self, chat_id, new_user_id):
+        User = get_user_model()
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return "Chat not found"
+        if not chat.is_group:
+            return "Not a group chat"
+        if not chat.users.filter(id=self.user.id).exists():
+            return "Not a member of chat"
+        if new_user_id == self.user.id:
+            return "Cannot add yourself"
+        try:
+            new_user = User.objects.get(id=new_user_id)
+        except User.DoesNotExist:
+            return "User not found"
+        if chat.users.filter(id=new_user_id).exists():
+            return "User is already in this chat"
+        ChatMember.objects.create(
+            chat=chat, user=new_user, role=ChatMember.Role.MEMBER
+        )
+        self.chat_users_cache.pop(chat_id, None)
+        return None
 
+    @database_sync_to_async
+    def build_group_members_updated_event(
+        self, chat_id, recipient_id, invitee_user_id=None
+    ):
+        User = get_user_model()
+        recipient = User.objects.select_related("profile").get(id=recipient_id)
+        chat = Chat.objects.prefetch_related(
+            "users",
+            "users__profile",
+            "users__profile__profile_media",
+        ).get(id=chat_id)
+        users_count = chat.users.count()
+        context = {"user": recipient, "user_id": recipient.id}
+        qs = chat.users.all().exclude(pk=recipient.pk)
+        members_data = ChatUserSerializer(qs, many=True, context=context).data
+        out = {
+            "chat_id": chat_id,
+            "members": members_data,
+            "users_count": users_count,
+        }
+        if (
+            invitee_user_id is not None
+            and recipient_id == invitee_user_id
+        ):
+            lst = get_chats_list(recipient, chat_ids=[chat_id])
+            rows = lst.get("chats") or []
+            if rows:
+                out["chat"] = rows[0]
+        return out
+
+    @database_sync_to_async
+    def try_remove_group_member(self, chat_id, target_user_id):
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return "Chat not found", None
+        if not chat.is_group:
+            return "Not a group chat", None
+        if not chat.users.filter(id=self.user.id).exists():
+            return "Not a member of chat", None
+        if not chat.users.filter(id=target_user_id).exists():
+            return "User is not in this chat", None
+
+        ChatMember.objects.filter(chat_id=chat_id, user_id=target_user_id).delete()
+        self.chat_users_cache.pop(chat_id, None)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return None, {"removed_id": target_user_id, "remaining_ids": []}
+
+        remaining_ids = list(chat.users.values_list("id", flat=True))
+        if not remaining_ids:
+            chat.delete()
+        return None, {
+            "removed_id": target_user_id,
+            "remaining_ids": remaining_ids,
+        }
+
+    @database_sync_to_async
+    def get_or_create_dialog(self, other_user_id):
         User = get_user_model()
 
         other_user = User.objects.get(id=other_user_id)
@@ -851,6 +1080,17 @@ class AppConsumer(BaseConsumer):
             {
                 "type": "chat_created",
                 "temp_chat_id": event.get("temp_chat_id"),
+                "chat": event.get("chat"),
+            }
+        )
+
+    async def group_members_updated(self, event):
+        await self.send_json(
+            {
+                "type": "group_members_updated",
+                "chat_id": event.get("chat_id"),
+                "members": event.get("members"),
+                "users_count": event.get("users_count"),
                 "chat": event.get("chat"),
             }
         )
