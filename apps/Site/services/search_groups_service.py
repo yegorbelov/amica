@@ -1,19 +1,13 @@
-"""Global search over all group chats (by name). Used by GroupSearch API."""
-
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Count
 
 from apps.accounts.models.models import Profile
 from apps.media_files.models.models import DisplayMedia
-from apps.Site.models import Chat, Contact
+from apps.Site.models import Chat, ChatMember, Contact
 from apps.Site.serializers import ChatListSerializer
 
 
 def search_groups_globally_for_user(user, query: str, limit: int = 40):
-    """
-    Return a list of dicts in ChatListSerializer shape for group chats whose
-    name contains query (case-insensitive). Does not filter by membership.
-    """
     q = (query or "").strip()
     if not q:
         return []
@@ -55,4 +49,10 @@ def search_groups_globally_for_user(user, query: str, limit: int = 40):
         "ct_chat_id": ct_chat,
         "interlocutors_map": {},
     }
-    return ChatListSerializer(chats, many=True, context=context).data
+    data = ChatListSerializer(chats, many=True, context=context).data
+    member_chat_ids = set(
+        ChatMember.objects.filter(user=user).values_list("chat_id", flat=True)
+    )
+    for row in data:
+        row["is_member"] = row["id"] in member_chat_ids
+    return data

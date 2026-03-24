@@ -589,11 +589,32 @@ class UserEmailSearchView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        users = User.objects.filter(
-            Q(email__istartswith=query) | Q(username__istartswith=query)
-        )[:20]
+        users = list(
+            User.objects.filter(
+                Q(email__istartswith=query) | Q(username__istartswith=query)
+            )[:20]
+        )
 
-        serializer = UserSerializer(users, many=True, context={"request": request})
+        peer_ids = [u.id for u in users if u.id != request.user.id]
+        dm_chat_by_peer_id = {}
+        if peer_ids:
+            my_chat_ids = ChatMember.objects.filter(user=request.user).values_list(
+                "chat_id", flat=True
+            )
+            for cm in ChatMember.objects.filter(
+                user_id__in=peer_ids, chat_id__in=my_chat_ids
+            ).select_related("chat"):
+                if cm.chat.chat_type == Chat.ChatType.DIALOG:
+                    dm_chat_by_peer_id[cm.user_id] = cm.chat_id
+
+        serializer = UserSerializer(
+            users,
+            many=True,
+            context={
+                "request": request,
+                "dm_chat_by_peer_id": dm_chat_by_peer_id,
+            },
+        )
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 

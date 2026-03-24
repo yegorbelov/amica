@@ -324,6 +324,7 @@ class ChatListSerializer(serializers.ModelSerializer):
     primary_media = serializers.SerializerMethodField()
     info = serializers.SerializerMethodField()
     type = serializers.CharField(source="chat_type")
+    peer_user_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Chat
@@ -335,6 +336,7 @@ class ChatListSerializer(serializers.ModelSerializer):
             "unread_count",
             "primary_media",
             "info",
+            "peer_user_id",
         ]
 
     def _get_display_cached(self, obj):
@@ -444,6 +446,13 @@ class ChatListSerializer(serializers.ModelSerializer):
 
     def get_unread_count(self, obj):
         return getattr(obj, "unread_count", 0)
+
+    def get_peer_user_id(self, obj):
+        if not obj.is_dialog:
+            return None
+        interlocutor = self._get_interlocutor_cached(obj)
+        return interlocutor.id if interlocutor else None
+
 
 from apps.accounts.serializers.serializers import ProfileSerializer
 class ChatUserSerializer(serializers.ModelSerializer):

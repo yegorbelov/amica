@@ -39,6 +39,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     profile = ProfileSerializer(read_only=True)
+    dm_chat_id = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
@@ -48,8 +49,13 @@ class UserSerializer(serializers.ModelSerializer):
             "username",
             "profile",
             "preferred_session_lifetime_days",
+            "dm_chat_id",
         )
         read_only_fields = fields
+
+    def get_dm_chat_id(self, obj):
+        mapping = self.context.get("dm_chat_by_peer_id") or {}
+        return mapping.get(obj.id)
 
     # def to_representation(self, instance):
     #     ret = super().to_representation(instance)
