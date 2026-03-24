@@ -333,20 +333,19 @@ class AppConsumer(BaseConsumer):
 
     async def handle_message_viewed(self, data):
         message_id = data.get("message_id")
+        chat_id = data.get("chat_id")
         if not message_id:
             return
 
-        chat_id = await self.get_message_chat_id(message_id)
-        if not chat_id or not await self.user_in_chat(chat_id):
-            return
+        if not chat_id:
+            chat_id = await self.get_message_chat_id(message_id)
 
-        await self.mark_message_as_viewed(message_id, self.user)
-        payload = {
-            "message_id": message_id,
-            "user_id": self.user.id,
-            "username": self.user.username,
-        }
-        await self.broadcast_to_chat_users(chat_id, "message_viewed", payload)
+        await self.mark_message_as_viewed(message_id, self.user.id)
+        await self.broadcast_to_chat_users(
+            chat_id,
+            "message_viewed",
+            {"chat_id": chat_id, "message_id": message_id, "userId": self.user.id},
+        )
 
     async def set_session_lifetime(self, data):
         days = data.get("days")
