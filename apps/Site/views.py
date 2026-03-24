@@ -556,7 +556,7 @@ class ChatListView(APIView):
             ),
             unread_count=Count(
                 "messages",
-                filter=Q(messages__viewed=False) & ~Q(messages__user=request.user),
+                filter=Q(messages__viewed=False, messages__is_deleted=False) & ~Q(messages__user=request.user),
             ),
         ).values(
             "id", "name", "last_message_content", "last_message_date", "unread_count"

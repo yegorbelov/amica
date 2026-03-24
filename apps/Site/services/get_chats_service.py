@@ -112,7 +112,7 @@ def get_chats_list(user):
 
     unread_map = dict(
         MessageRecipient.objects.filter(
-            user=user, is_deleted=False, read_date__isnull=True
+            user=user, is_deleted=False, message__is_deleted=False, read_date__isnull=True
         )
         .exclude(message__user=user)
         .values("message__chat_id")
