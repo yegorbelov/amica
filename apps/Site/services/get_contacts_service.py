@@ -1,4 +1,4 @@
-"""Service to build contacts list for a user. Used by GetContacts API and WebSocket get_contacts."""
+"""Service to build contacts list for a user. Used by WebSocket get_contacts."""
 
 from django.contrib.auth import get_user_model
 from django.db.models import Prefetch
@@ -10,10 +10,7 @@ User = get_user_model()
 
 
 def get_contacts_for_user(user):
-    """
-    Return {"contacts": [...]} for the given user.
-    Same data as GetContacts API; context uses user and dialog_map (no request).
-    """
+    """Return {"contacts": [...]} for the given user (dialog_map from DB, no request)."""
     contacts = (
         Contact.objects.filter(owner=user)
         .select_related("user", "user__profile")

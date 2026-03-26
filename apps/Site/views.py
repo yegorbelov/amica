@@ -25,7 +25,6 @@ from .serializers import *
 from .serializers import MessageSerializer
 from .services.get_chats_service import get_chats_list
 from .services.get_chat_service import get_chat_for_user
-from .services.get_contacts_service import get_contacts_for_user
 from .services.get_general_info_service import get_general_info_for_user
 from .services.create_group_service import create_group_and_serialize
 from .services.search_groups_service import search_groups_globally_for_user
@@ -569,14 +568,6 @@ class ChatListView(APIView):
 
 
 User = get_user_model()
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def GetContacts(request):
-    data = get_contacts_for_user(request.user)
-    return Response(data, status=200)
-
 
 
 class UserEmailSearchView(APIView):

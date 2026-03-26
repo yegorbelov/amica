@@ -15,7 +15,6 @@ urlpatterns = [
         name="get_messages",
     ),
     path("get_general_info/", get_general_info, name="get_general_info"),
-    path("get_contacts/", GetContacts, name="get_contacts"),
     path("users/search/", UserEmailSearchView.as_view(), name="user-email-search"),
     path("groups/search/", GroupSearchView.as_view(), name="group-search"),
     path("groups/create/", CreateGroupView.as_view(), name="group-create"),
