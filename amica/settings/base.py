@@ -183,6 +183,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.Site.tasks.cleanup_blacklist.cleanup_expired_blacklisted_tokens",
         "schedule": crontab(hour=3, minute=30),
     },
+    "purge_soft_deleted_messages_minutely": {
+        "task": "apps.Site.tasks.purge_deleted_messages.purge_soft_deleted_messages",
+        "schedule": timedelta(seconds=20),
+    },
 }
 
 MEDIA_URL = "/media/"

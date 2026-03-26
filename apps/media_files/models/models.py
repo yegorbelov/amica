@@ -247,6 +247,11 @@ class File(PolymorphicModel):
     def __str__(self):
         return self.original_name or self.name or f"File {self.id}"
 
+    def delete(self, *args, **kwargs):
+        if self.file:
+            self.file.delete(save=False)
+        super().delete(*args, **kwargs)
+
 
 class ImageFile(ImageProcessingMixin, File):
     thumbnail_small = models.ImageField(
@@ -282,6 +287,13 @@ class ImageFile(ImageProcessingMixin, File):
                 "thumbnail_medium",
             ]
         )
+
+    def delete(self, *args, **kwargs):
+        if self.thumbnail_small:
+            self.thumbnail_small.delete(save=False)
+        if self.thumbnail_medium:
+            self.thumbnail_medium.delete(save=False)
+        super().delete(*args, **kwargs)
 
 
 import logging
@@ -347,6 +359,11 @@ class AudioFile(File):
         upload_to="thumbnails/cover/",
         storage=protected_storage,
     )
+
+    def delete(self, *args, **kwargs):
+        if self.cover:
+            self.cover.delete(save=False)
+        super().delete(*args, **kwargs)
 
 
 from django.dispatch import receiver

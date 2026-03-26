@@ -41,7 +41,11 @@ def get_chat_for_user(
         )
         messages_qs = (
             Message.objects.filter(
-                chat_id=chat_id, is_deleted=False, id__gt=cursor_newer
+                chat_id=chat_id,
+                deleted_at__isnull=True,
+                id__gt=cursor_newer,
+                recipients__user=user,
+                recipients__deleted_at__isnull=True,
             )
             .select_related("user")
             .prefetch_related("file", recipients_prefetch, "message_reactions")
@@ -59,7 +63,12 @@ def get_chat_for_user(
             to_attr="read_recipients",
         )
         messages_qs = (
-            Message.objects.filter(chat_id=chat_id, is_deleted=False)
+            Message.objects.filter(
+                chat_id=chat_id,
+                deleted_at__isnull=True,
+                recipients__user=user,
+                recipients__deleted_at__isnull=True,
+            )
             .select_related("user")
             .prefetch_related("file", recipients_prefetch, "message_reactions")
             .order_by("-date")

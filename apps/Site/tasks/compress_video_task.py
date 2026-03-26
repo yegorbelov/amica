@@ -92,8 +92,13 @@ def compress_video_task(self, model_name: str, video_id: int):
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
         )
 
+        # Original is no longer needed; remove from storage before writing compressed
+        # (avoids leaving a second copy if storage uses new names on save).
+        save_name = os.path.basename(video_path)
+        video_field.delete(save=False)
+
         with open(temp_output, "rb") as f:
-            video_field.save(os.path.basename(video_field.name), File(f), save=True)
+            video_field.save(save_name, File(f), save=True)
 
         if not hasattr(video_instance, "status"):
             return {"status": "done"}

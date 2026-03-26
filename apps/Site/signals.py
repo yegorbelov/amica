@@ -1,13 +1,19 @@
 import logging
 
 from django.contrib.auth import get_user_model
-from django.db.models.signals import m2m_changed, post_save
+from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.dispatch import receiver
 
 from apps.media_files.models.models import DisplayVideo, VideoFile
 
 from .models import Chat, Message, MessageRecipient
 from .tasks.compress_video_task import compress_video_task
+from .utils.message_media import delete_orphan_message_files
+
+
+@receiver(pre_delete, sender=Message)
+def remove_orphan_files_before_message_delete(sender, instance, **kwargs):
+    delete_orphan_message_files(instance)
 
 
 @receiver(post_save, sender=Message)

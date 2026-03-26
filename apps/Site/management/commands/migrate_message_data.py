@@ -28,7 +28,7 @@ class Command(BaseCommand):
                         MessageRecipient(
                             message=message,
                             user=user,
-                            is_deleted=is_deleted,
+                            deleted_at=deleted_at,
                             read_date=read_date,
                         )
                     )

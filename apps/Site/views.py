@@ -120,7 +120,7 @@ class GetMessagesAPIView(APIView):
             )
 
             messages_qs = (
-                chat.messages.filter(is_deleted=False)
+                chat.messages.filter(deleted_at__isnull=True)
                 .select_related("user", "user__profile", "reply_to")
                 .prefetch_related("file", recipients_prefetch, "message_reactions")
                 .order_by("-date")
@@ -333,7 +333,7 @@ class MessageViewSet(viewsets.ViewSet):
 
     def get_queryset(self, chat_id):
         return (
-            Message.objects.filter(chat_id=chat_id, is_deleted=False)
+            Message.objects.filter(chat_id=chat_id, deleted_at__isnull=True)
             .select_related("user", "user__profile")
             .prefetch_related("file", "message_reactions")
         )
@@ -485,7 +485,7 @@ class MessageViewSet(viewsets.ViewSet):
         try:
             message = Message.objects.get(pk=pk, user=request.user)
             chat_id = message.chat_id
-            message.is_deleted = True
+            message.deleted_at = timezone.now()
             message.save()
             from .services.ws_sender import send_ws_message_deleted
             send_ws_message_deleted(chat_id, message.id)
@@ -558,7 +558,7 @@ class ChatListView(APIView):
             ),
             unread_count=Count(
                 "messages",
-                filter=Q(messages__viewed=False, messages__is_deleted=False) & ~Q(messages__user=request.user),
+                filter=Q(messages__viewed=False, messages__deleted_at__isnull=True) & ~Q(messages__user=request.user),
             ),
         ).values(
             "id", "name", "last_message_content", "last_message_date", "unread_count"

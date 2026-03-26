@@ -263,7 +263,7 @@ class Message(models.Model):
         null=True,
     )
 
-    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     edit_date = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -271,7 +271,7 @@ class Message(models.Model):
             models.Index(fields=["chat", "-date", "id"]),
             models.Index(fields=["user", "-date"]),
             models.Index(
-                fields=["chat", "is_deleted", "-date"], name="msg_chat_isdel_date_idx"
+                fields=["chat", "deleted_at", "-date"], name="msg_chat_deleted_date_idx"
             ),
         ]
 
@@ -352,18 +352,18 @@ class MessageRecipient(models.Model):
         related_name="message_recipients",
     )
 
-    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     read_date = models.DateTimeField(null=True, blank=True)
     created_date = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ["message", "user"]
         indexes = [
-            models.Index(fields=["user", "read_date", "is_deleted"]),
+            models.Index(fields=["user", "read_date", "deleted_at"]),
             models.Index(fields=["message", "user"]),
-            models.Index(fields=["user", "is_deleted", "message"]),
-            models.Index(fields=["user", "is_deleted", "read_date"]),
-            models.Index(fields=["user", "is_deleted", "read_date", "message"]),
+            models.Index(fields=["user", "deleted_at", "message"]),
+            models.Index(fields=["user", "deleted_at", "read_date"]),
+            models.Index(fields=["user", "deleted_at", "read_date", "message"]),
         ]
         ordering = ["-created_date", "-pk"]
 

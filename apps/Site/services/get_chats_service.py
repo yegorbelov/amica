@@ -27,7 +27,7 @@ def get_chats_list(user, chat_ids=None):
     after being added to a group).
     """
     last_message_subquery = Message.objects.filter(
-        chat_id=OuterRef("pk"), is_deleted=False
+        chat_id=OuterRef("pk"), deleted_at__isnull=True
     ).order_by("-date")
 
     member_count_subquery = (
@@ -117,7 +117,7 @@ def get_chats_list(user, chat_ids=None):
 
     unread_map = dict(
         MessageRecipient.objects.filter(
-            user=user, is_deleted=False, message__is_deleted=False, read_date__isnull=True
+            user=user, deleted_at__isnull=True, message__deleted_at__isnull=True, read_date__isnull=True
         )
         .exclude(message__user=user)
         .values("message__chat_id")

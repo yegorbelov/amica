@@ -50,7 +50,6 @@ class MessageSerializer(serializers.ModelSerializer):
             "user_reactions",
             "user_reaction",
             "is_own",
-            "is_deleted",
             "edit_date",
             # "forwarded",
             # "reply_to",
@@ -61,7 +60,7 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_files(self, obj):
-        if getattr(obj, "is_deleted", False):
+        if getattr(obj, "deleted_at", None):
             return []
         request = self.context.get("request")
         serialized_files = []
@@ -130,7 +129,7 @@ class MessageSerializer(serializers.ModelSerializer):
         return False
 
     def get_reply_to_message(self, obj):
-        if obj.reply_to and not obj.reply_to.is_deleted:
+        if obj.reply_to and not obj.reply_to.deleted_at:
             return {
                 "id": obj.reply_to.id,
                 "value": obj.reply_to.value,
@@ -139,7 +138,7 @@ class MessageSerializer(serializers.ModelSerializer):
                     "username": obj.reply_to.user.username,
                 },
                 "date": obj.reply_to.date.isoformat() if obj.reply_to.date else None,
-                "is_deleted": obj.reply_to.is_deleted,
+                "deleted_at": obj.reply_to.deleted_at,
             }
         return None
 

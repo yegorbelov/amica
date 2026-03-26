@@ -877,9 +877,8 @@ class AppConsumer(BaseConsumer):
             message = Message.objects.filter(id=message_id).first()
             if not message or message.user_id != user.id:
                 return False
-            message.is_deleted = True
-            message.value = None
-            message.save(update_fields=["is_deleted", "value"])
+            message.deleted_at = timezone.now()
+            message.save(update_fields=["deleted_at"])
             return True
         except Exception as e:
             logger.error(f"Error deleting message: {e}")
