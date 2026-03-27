@@ -192,6 +192,11 @@ CELERY_BEAT_SCHEDULE = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Large multipart uploads: keep in-memory buffers small; spill to FILE_UPLOAD_TEMP_DIR.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # 2.5 MiB (Django default)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # 2.5 MiB (Django default)
+FILE_UPLOAD_TEMP_DIR = str(BASE_DIR / "tmp")
+
 PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
 
 AUTH_USER_MODEL = "accounts.CustomUser"

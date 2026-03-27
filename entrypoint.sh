@@ -31,11 +31,16 @@ python manage.py migrate --noinput
 if [ "$1" = "python" ] && [ "$2" = "manage.py" ]; then
   echo "Collecting static files..."
   python manage.py collectstatic --no-input
+elif [ "$1" = "daphne" ]; then
+  echo "Collecting static files..."
+  python manage.py collectstatic --no-input
 fi
 
 mkdir -p /app/media
+mkdir -p /app/tmp
 
 chmod 755 /app/media
+chmod 755 /app/tmp
 
 umask 002
 
