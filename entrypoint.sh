@@ -24,6 +24,14 @@ fi
 
 echo "Database $dbname is ready"
 
+mkdir -p /app/media
+mkdir -p /app/tmp
+
+chmod 755 /app/media
+chmod 755 /app/tmp
+
+umask 002
+
 echo "Running Django migrations..."
 python manage.py makemigrations --noinput
 python manage.py migrate --noinput
@@ -35,14 +43,6 @@ elif [ "$1" = "daphne" ]; then
   echo "Collecting static files..."
   python manage.py collectstatic --no-input
 fi
-
-mkdir -p /app/media
-mkdir -p /app/tmp
-
-chmod 755 /app/media
-chmod 755 /app/tmp
-
-umask 002
 
 
 exec "$@"
