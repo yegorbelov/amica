@@ -63,3 +63,55 @@ def process_audio_task(audiofile_id, message_id, user_id):
     except Exception as e:
         logger.exception(f"Audio processing failed for {audiofile_id}")
         return None
+
+
+@shared_task
+def process_image_task(imagefile_id, message_id, user_id):
+    from apps.media_files.models import ImageFile
+    from apps.Site.models import Message
+    from apps.Site.services.ws_sender import send_ws_message
+
+    try:
+        imagefile = ImageFile.objects.get(id=imagefile_id)
+        imagefile.process_image()
+        imagefile.save(
+            update_fields=[
+                "width",
+                "height",
+                "dominant_color",
+                "thumbnail_small",
+                "thumbnail_medium",
+            ],
+            process_media=False,
+        )
+
+        message = Message.objects.get(id=message_id)
+        send_ws_message(message, user_id)
+
+        return {"imagefile_id": imagefile_id}
+    except Exception:
+        logger.exception(f"Image processing failed for {imagefile_id}")
+        return None
+
+
+@shared_task
+def process_video_task(videofile_id, message_id, user_id):
+    from apps.media_files.models import VideoFile
+    from apps.Site.models import Message
+    from apps.Site.services.ws_sender import send_ws_message
+
+    try:
+        videofile = VideoFile.objects.get(id=videofile_id)
+        videofile.populate_video_metadata()
+        videofile.save(
+            update_fields=["width", "height", "has_audio"],
+            process_media=False,
+        )
+
+        message = Message.objects.get(id=message_id)
+        send_ws_message(message, user_id)
+
+        return {"videofile_id": videofile_id}
+    except Exception:
+        logger.exception(f"Video processing failed for {videofile_id}")
+        return None

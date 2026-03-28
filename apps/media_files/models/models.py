@@ -276,17 +276,19 @@ class ImageFile(ImageProcessingMixin, File):
     }
 
     def save(self, *args, **kwargs):
+        process_media = kwargs.pop("process_media", True)
         super().save(*args, **kwargs)
-        self.process_image()
-        super().save(
-            update_fields=[
-                "width",
-                "height",
-                "dominant_color",
-                "thumbnail_small",
-                "thumbnail_medium",
-            ]
-        )
+        if process_media and self.file:
+            self.process_image()
+            super().save(
+                update_fields=[
+                    "width",
+                    "height",
+                    "dominant_color",
+                    "thumbnail_small",
+                    "thumbnail_medium",
+                ]
+            )
 
     def delete(self, *args, **kwargs):
         if self.thumbnail_small:
@@ -307,7 +309,7 @@ class VideoFile(File):
     duration = models.FloatField(null=True, blank=True)
     has_audio = models.BooleanField(null=True, blank=True)
 
-    def save(self, *args, **kwargs):
+    def populate_video_metadata(self):
         if self.file and (self.width is None or self.height is None):
             try:
                 file_path = self.file.storage.path(self.file.name)
@@ -343,6 +345,10 @@ class VideoFile(File):
             except Exception as e:
                 logger.error(f"Video processing failed for {self.file.name}: {e}")
 
+    def save(self, *args, **kwargs):
+        process_media = kwargs.pop("process_media", True)
+        if process_media:
+            self.populate_video_metadata()
         super().save(*args, **kwargs)
 
 

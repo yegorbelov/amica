@@ -10,7 +10,7 @@ services:
     volumes:
       - .:/app
       - ./tmp:/app/tmp
-    command: daphne -b 0.0.0.0 -p 8000 amica.asgi:application
+    command: python -u manage.py runserver 0.0.0.0:8000
     depends_on:
       redis:
         condition: service_healthy

@@ -196,6 +196,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # 2.5 MiB (Django default)
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # 2.5 MiB (Django default)
 FILE_UPLOAD_TEMP_DIR = str(BASE_DIR / "tmp")
+# Avoid RAM spikes during large multipart uploads: write file parts directly to temp files.
+FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.TemporaryFileUploadHandler"]
 
 PROTECTED_MEDIA_ROOT = BASE_DIR / "protected_files"
 
