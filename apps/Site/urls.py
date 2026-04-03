@@ -1,12 +1,20 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from .message_chunk_upload_views import (
+    MessageChunkBundleCompleteView,
+    MessageChunkInitView,
+    MessageChunkPartView,
+)
 from .views import *
 
 router = DefaultRouter()
 router.register(r"messages", MessageViewSet, basename="messages")
 
 urlpatterns = [
+    path("messages/chunk/init/", MessageChunkInitView.as_view()),
+    path("messages/chunk/part/", MessageChunkPartView.as_view()),
+    path("messages/chunk/complete/", MessageChunkBundleCompleteView.as_view()),
     path("get_chats/", GetChats.as_view(), name="get_chats"),
     path("get_chat/<int:chat_id>/", GetChat.as_view(), name="get_chat"),
     path(
