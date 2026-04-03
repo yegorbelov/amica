@@ -50,6 +50,14 @@ def compress_video_task(self, model_name: str, video_id: int):
             scale_option = ["-vf", "scale=800:-2"]
             audio_option = ["-c:a", "aac", "-b:a", "128k", "-profile:a", "aac_low"]
 
+        # Chat / VideoFile: progressive MP4 (moov at start) — fewer Range round-trips in
+        # <video> than fMP4 (frag_keyframe+empty_moov+default_base_moof). Profile clips
+        # keep fragmented output for streaming-style use.
+        if model_name == "DisplayVideo":
+            movflags = "+faststart+frag_keyframe+empty_moov+default_base_moof"
+        else:
+            movflags = "+faststart"
+
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             temp_output = tmp.name
 
@@ -84,7 +92,7 @@ def compress_video_task(self, model_name: str, video_id: int):
             "-sc_threshold",
             "0",
             "-movflags",
-            "+faststart+frag_keyframe+empty_moov+default_base_moof",
+            movflags,
             temp_output,
         ]
 
