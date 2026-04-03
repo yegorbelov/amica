@@ -401,11 +401,6 @@ class MessageViewSet(viewsets.ViewSet):
                             needs_processing = True
                             new_file = ImageFile(file=filename)
                             new_file.save(process_media=False)
-                            process_image_task.delay(
-                                imagefile_id=new_file.id,
-                                message_id=new_message.id,
-                                user_id=user.id,
-                            )
                         elif mime_type and mime_type.startswith("video/"):
                             from apps.media_files.tasks.audio_waveform import (
                                 process_video_task,
@@ -414,30 +409,37 @@ class MessageViewSet(viewsets.ViewSet):
                             needs_processing = True
                             new_file = VideoFile(file=filename)
                             new_file.save(process_media=False)
+                        elif mime_type and mime_type.startswith("audio/"):
+                            from apps.media_files.models import AudioFile
+                            from apps.media_files.tasks.audio_waveform import process_audio_task
+                            needs_processing = True
+                            new_file = AudioFile.objects.create(file=filename)
+                        else:
+                            new_file = File.objects.create(file=filename)
+                        new_message.file.add(new_file)
+                        if mime_type and mime_type.startswith("image/"):
+                            process_image_task.delay(
+                                imagefile_id=new_file.id,
+                                message_id=new_message.id,
+                                user_id=user.id,
+                            )
+                        elif mime_type and mime_type.startswith("video/"):
                             process_video_task.delay(
                                 videofile_id=new_file.id,
                                 message_id=new_message.id,
                                 user_id=user.id,
                             )
                         elif mime_type and mime_type.startswith("audio/"):
-                            from apps.media_files.models import AudioFile
-                            from apps.media_files.tasks.audio_waveform import process_audio_task
-                            needs_processing = True
-                            new_file = AudioFile.objects.create(file=filename)
                             process_audio_task.delay(
                                 audiofile_id=new_file.id,
                                 message_id=new_message.id,
                                 user_id=user.id
                             )
-                        else:
-                            new_file = File.objects.create(file=filename)
-                        new_message.file.add(new_file)
 
                 new_message.save()
                 
-                if not needs_processing:
-                    from apps.Site.services.ws_sender import send_ws_message
-                    send_ws_message(new_message, user.id)
+                from apps.Site.services.ws_sender import send_ws_message
+                send_ws_message(new_message, user.id)
 
                 # channel_layer = get_channel_layer()
 

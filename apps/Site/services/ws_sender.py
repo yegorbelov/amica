@@ -23,6 +23,29 @@ def send_ws_message(message, sender_id):
         )
 
 
+def send_ws_message_updated(message, sender_id):
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    from apps.Site.serializers import MessageSerializer
+
+    chat = message.chat
+    channel_layer = get_channel_layer()
+    user_ids = list(chat.users.values_list("id", flat=True))
+
+    for recipient_id in user_ids:
+        serialized_message = MessageSerializer(
+            message, context={"user_id": recipient_id}
+        ).data
+        async_to_sync(channel_layer.group_send)(
+            f"user_{recipient_id}",
+            {
+                "type": "message_updated",
+                "chat_id": chat.id,
+                "data": serialized_message,
+            },
+        )
+
+
 def send_ws_message_deleted(chat_id, message_id):
     """Broadcast message_deleted to all chat users (e.g. when message is deleted via REST)."""
     from channels.layers import get_channel_layer

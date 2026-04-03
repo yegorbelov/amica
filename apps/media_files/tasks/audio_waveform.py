@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def process_audio_task(audiofile_id, message_id, user_id):
     from apps.media_files.models import AudioFile
     from apps.Site.models import Message
-    from apps.Site.services.ws_sender import send_ws_message
+    from apps.Site.services.ws_sender import send_ws_message_updated
 
     try:
         audiofile = AudioFile.objects.get(id=audiofile_id)
@@ -56,7 +56,7 @@ def process_audio_task(audiofile_id, message_id, user_id):
         
         message = Message.objects.get(id=message_id)
 
-        send_ws_message(message, user_id)
+        send_ws_message_updated(message, user_id)
 
         return {"duration": duration, "waveform": waveform}
 
@@ -69,7 +69,7 @@ def process_audio_task(audiofile_id, message_id, user_id):
 def process_image_task(imagefile_id, message_id, user_id):
     from apps.media_files.models import ImageFile
     from apps.Site.models import Message
-    from apps.Site.services.ws_sender import send_ws_message
+    from apps.Site.services.ws_sender import send_ws_message_updated
 
     try:
         imagefile = ImageFile.objects.get(id=imagefile_id)
@@ -86,7 +86,7 @@ def process_image_task(imagefile_id, message_id, user_id):
         )
 
         message = Message.objects.get(id=message_id)
-        send_ws_message(message, user_id)
+        send_ws_message_updated(message, user_id)
 
         return {"imagefile_id": imagefile_id}
     except Exception:
@@ -98,7 +98,7 @@ def process_image_task(imagefile_id, message_id, user_id):
 def process_video_task(videofile_id, message_id, user_id):
     from apps.media_files.models import VideoFile
     from apps.Site.models import Message
-    from apps.Site.services.ws_sender import send_ws_message
+    from apps.Site.services.ws_sender import send_ws_message_updated
 
     try:
         videofile = VideoFile.objects.get(id=videofile_id)
@@ -109,7 +109,7 @@ def process_video_task(videofile_id, message_id, user_id):
         )
 
         message = Message.objects.get(id=message_id)
-        send_ws_message(message, user_id)
+        send_ws_message_updated(message, user_id)
 
         return {"videofile_id": videofile_id}
     except Exception:
