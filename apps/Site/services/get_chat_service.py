@@ -1,10 +1,41 @@
 """Service to build single chat with messages for a user. Used by GetChat API and WebSocket get_chat."""
 
+from collections import defaultdict
+
 from django.db.models import Prefetch
-from apps.Site.models import Chat, Message, MessageRecipient
+
+from apps.Site.models import Chat, Contact, Message, MessageRecipient
 from apps.Site.serializers import ChatSerializer
 
 PAGE_SIZE = 25
+
+
+def _message_file_ids_by_message_id(message_pks):
+    """One query: M2M through row order (by pk) per message. Empty input → {}."""
+    if not message_pks:
+        return {}
+    through = Message.file.through
+    msg_fk = through._meta.get_field("message").attname
+    file_fk = through._meta.get_field("file").attname
+    order_map = defaultdict(list)
+    rows = (
+        through.objects.filter(**{f"{msg_fk}__in": message_pks})
+        .order_by(msg_fk, "pk")
+        .values_list(msg_fk, file_fk)
+    )
+    for mid, fid in rows:
+        order_map[mid].append(fid)
+    return dict(order_map)
+
+
+def _read_recipients_prefetch():
+    return Prefetch(
+        "recipients",
+        queryset=MessageRecipient.objects.filter(
+            read_date__isnull=False
+        ).select_related("user"),
+        to_attr="read_recipients",
+    )
 
 
 def get_chat_for_user(
@@ -34,11 +65,6 @@ def get_chat_for_user(
         raise Chat.DoesNotExist("Chat not found")
 
     if cursor_newer is not None:
-        recipients_prefetch = Prefetch(
-            "recipients",
-            queryset=MessageRecipient.objects.filter(read_date__isnull=False),
-            to_attr="read_recipients",
-        )
         messages_qs = (
             Message.objects.filter(
                 chat_id=chat_id,
@@ -48,7 +74,7 @@ def get_chat_for_user(
                 recipients__deleted_at__isnull=True,
             )
             .select_related("user")
-            .prefetch_related("file", recipients_prefetch, "message_reactions")
+            .prefetch_related("file", _read_recipients_prefetch(), "message_reactions")
             .order_by("date")
         )
         messages = list(messages_qs[:page_size])
@@ -57,11 +83,6 @@ def get_chat_for_user(
         )
         next_cursor = None
     else:
-        recipients_prefetch = Prefetch(
-            "recipients",
-            queryset=MessageRecipient.objects.filter(read_date__isnull=False),
-            to_attr="read_recipients",
-        )
         messages_qs = (
             Message.objects.filter(
                 chat_id=chat_id,
@@ -70,7 +91,7 @@ def get_chat_for_user(
                 recipients__deleted_at__isnull=True,
             )
             .select_related("user")
-            .prefetch_related("file", recipients_prefetch, "message_reactions")
+            .prefetch_related("file", _read_recipients_prefetch(), "message_reactions")
             .order_by("-date")
         )
         if cursor is not None:
@@ -82,6 +103,22 @@ def get_chat_for_user(
         )
         next_newer_cursor = None
 
+    message_pks = [m.pk for m in messages]
+    file_order_map = _message_file_ids_by_message_id(message_pks)
+
+    dialog_contact = None
+    dialog_contact_interlocutor_id = None
+    if chat.is_dialog:
+        others = [u for u in chat.users.all() if u.pk != user.pk]
+        interlocutor = others[0] if others else None
+        if interlocutor is not None:
+            dialog_contact_interlocutor_id = interlocutor.pk
+            dialog_contact = (
+                Contact.objects.filter(owner=user, user=interlocutor)
+                .prefetch_related("display_media")
+                .first()
+            )
+
     chat._prefetched_objects_cache = {
         "messages": messages,
     }
@@ -91,6 +128,9 @@ def get_chat_for_user(
         context={
             "user": user,
             "user_id": user.id,
+            "message_file_ids_by_message_id": file_order_map,
+            "dialog_contact": dialog_contact,
+            "dialog_contact_interlocutor_id": dialog_contact_interlocutor_id,
         },
     )
     data = serializer.data

@@ -13,6 +13,44 @@ from apps.media_files.serializers.serializers import (
 
 from .models import *
 
+
+def _generic_primary_media(manager):
+    """Use prefetched GenericRelation cache; avoid .filter() which can re-query."""
+    return next((m for m in manager.all() if m.is_primary), None)
+
+
+def _generic_non_primary_media(manager):
+    return [m for m in manager.all() if not m.is_primary]
+
+
+def _iter_message_files_attachment_order(message, file_id_order=None):
+    """
+    Files in the order they were attached (M2M through row id).
+    message.file.all() follows File.Meta.ordering; with identical uploaded_at
+    that order is undefined and can differ from attachment order (WS vs reload).
+
+    file_id_order: optional list of file pks from a batch through query
+    (context ``message_file_ids_by_message_id``). If None, one DB query per message.
+    """
+    if getattr(message, "deleted_at", None):
+        return
+    if file_id_order is not None:
+        file_pks = file_id_order
+    else:
+        through = Message.file.through
+        file_attname = through._meta.get_field("file").attname
+        file_pks = (
+            through.objects.filter(message_id=message.pk)
+            .order_by("pk")
+            .values_list(file_attname, flat=True)
+        )
+    by_pk = {f.pk: f for f in message.file.all()}
+    for pk in file_pks:
+        instance = by_pk.get(pk)
+        if instance is not None:
+            yield instance
+
+
 # class UserProfileSerializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = Profile
@@ -64,7 +102,9 @@ class MessageSerializer(serializers.ModelSerializer):
             return []
         request = self.context.get("request")
         serialized_files = []
-        for f in obj.file.all():
+        order_map = self.context.get("message_file_ids_by_message_id")
+        file_order = order_map.get(obj.pk, []) if order_map is not None else None
+        for f in _iter_message_files_attachment_order(obj, file_id_order=file_order):
             if isinstance(f, ImageFile):
                 serializer = ImageFileSerializer(f, context={"request": request})
             elif isinstance(f, VideoFile):
@@ -299,9 +339,8 @@ class MessageChatListSerializer(MessageSerializer):
     files = serializers.SerializerMethodField()
 
     def get_files(self, obj):
-        files = obj.file.all()
         serialized = []
-        for f in files:
+        for f in _iter_message_files_attachment_order(obj):
             if isinstance(f, ImageFile):
                 serialized.append(ImageFileSerializer(f, context=self.context).data)
             elif isinstance(f, VideoFile):
@@ -527,9 +566,11 @@ class ChatSerializer(serializers.ModelSerializer):
 
         if obj.pk not in self._interlocutor_cache:
             user = self._get_current_user()
-            self._interlocutor_cache[obj.pk] = (
-                obj.get_interlocutor(user) if user else None
-            )
+            if not user or not obj.is_dialog:
+                self._interlocutor_cache[obj.pk] = None
+            else:
+                others = [u for u in obj.users.all() if u.pk != user.pk]
+                self._interlocutor_cache[obj.pk] = others[0] if others else None
 
         return self._interlocutor_cache[obj.pk]
 
@@ -539,12 +580,16 @@ class ChatSerializer(serializers.ModelSerializer):
 
         key = interlocutor.pk if interlocutor else None
         if key not in self._contact_cache:
-            user = self._get_current_user()
-            self._contact_cache[key] = (
-                Contact.objects.filter(owner=user, user=interlocutor).first()
-                if user and interlocutor
-                else None
-            )
+            ctx_peer = self.context.get("dialog_contact_interlocutor_id")
+            if interlocutor and ctx_peer == interlocutor.pk:
+                self._contact_cache[key] = self.context.get("dialog_contact")
+            else:
+                user = self._get_current_user()
+                self._contact_cache[key] = (
+                    Contact.objects.filter(owner=user, user=interlocutor).first()
+                    if user and interlocutor
+                    else None
+                )
 
         return self._contact_cache[key]
 
@@ -559,7 +604,7 @@ class ChatSerializer(serializers.ModelSerializer):
         user = self._get_current_user()
 
         if not obj.is_dialog or not user:
-            avatar = obj.display_media.filter(is_primary=True).first()
+            avatar = _generic_primary_media(obj.display_media)
             return {
                 "name": obj.name,
                 "avatar": avatar,
@@ -580,9 +625,9 @@ class ChatSerializer(serializers.ModelSerializer):
 
         avatar = None
         if contact:
-            avatar = contact.display_media.filter(is_primary=True).first()
+            avatar = _generic_primary_media(contact.display_media)
         if not avatar and profile:
-            avatar = profile.profile_media.filter(is_primary=True).first()
+            avatar = _generic_primary_media(profile.profile_media)
 
         return {
             "name": name,
@@ -608,18 +653,18 @@ class ChatSerializer(serializers.ModelSerializer):
             display_avatar = display["avatar"]
 
             if contact:
-                media_items.extend(contact.display_media.filter(is_primary=False))
+                media_items.extend(_generic_non_primary_media(contact.display_media))
 
             if profile:
-                profile_primary = profile.profile_media.filter(is_primary=True).first()
+                profile_primary = _generic_primary_media(profile.profile_media)
 
                 if profile_primary and profile_primary != display_avatar:
                     media_items.append(profile_primary)
 
-                media_items.extend(profile.profile_media.filter(is_primary=False))
+                media_items.extend(_generic_non_primary_media(profile.profile_media))
 
         else:
-            media_items = list(obj.display_media.filter(is_primary=False))
+            media_items = _generic_non_primary_media(obj.display_media)
 
         media_items = list(dict.fromkeys(media_items))
         return DisplayMediaSerializer(media_items, many=True, context=self.context).data

@@ -198,7 +198,7 @@ class File(PolymorphicModel):
     uploaded_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        ordering = ["-uploaded_at"]
+        ordering = ["uploaded_at", "pk"]
         indexes = [
             models.Index(fields=["uploaded_at"]),
             models.Index(fields=["category", "uploaded_at"]),
