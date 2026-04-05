@@ -16,6 +16,8 @@ VIDEO_PRESET = "faster"
 VIDEO_PROFILE = "main"
 VIDEO_LEVEL = "4.0"
 VIDEO_THREADS = "2"
+VIDEO_MAXRATE = "1800k"
+VIDEO_BUFSIZE = "3600k"
 
 
 class FfmpegCompressionError(RuntimeError):
@@ -57,7 +59,8 @@ def compress_video_sync(model_name: str, video_id: int):
             audio_option = ["-an"]
         else:
             duration_option = []
-            scale_option = ["-vf", "scale=1280:-2"]
+            # Do not upscale small sources to avoid unnecessary bitrate growth.
+            scale_option = ["-vf", "scale='min(1280,iw)':-2"]
             audio_option = ["-c:a", "aac", "-b:a", "128k", "-profile:a", "aac_low"]
 
         # Chat / VideoFile: progressive MP4 (moov at start) — fewer Range round-trips in
@@ -96,6 +99,10 @@ def compress_video_sync(model_name: str, video_id: int):
             VIDEO_PRESET,
             "-crf",
             VIDEO_CRF,
+            "-maxrate",
+            VIDEO_MAXRATE,
+            "-bufsize",
+            VIDEO_BUFSIZE,
             "-pix_fmt",
             "yuv420p",
             "-g",
