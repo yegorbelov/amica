@@ -47,3 +47,21 @@ pytest_cache/
 ruff_cache/
 coverage/
 htmlcov/
+
+# Local env / tooling (never needed in image)
+venv_new/
+venv/
+
+# GeoIP DB files (mount at runtime or bake in deploy, not from dev tree)
+geoip/
+
+# Local backups & large fixtures
+backups/
+full_data.json
+data.json
+
+# Celery beat local state (incl. copies like "celerybeat-schedule-wal 3")
+celerybeat-schedule*
+
+# CI / docs (optional shrink of context)
+.github/

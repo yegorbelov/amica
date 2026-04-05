@@ -445,9 +445,14 @@ class MessageViewSet(viewsets.ViewSet):
                             new_file.save(process_media=True)
                         elif is_audio:
                             from apps.media_files.models import AudioFile
-                            from apps.media_files.tasks.audio_waveform import process_audio_task
+                            from apps.media_files.tasks.audio_waveform import (
+                                populate_audiofile_metadata,
+                            )
                             needs_processing = True
                             new_file = AudioFile.objects.create(file=filename)
+                            # Populate audio metadata/cover immediately so prod
+                            # does not depend on Celery timing/worker file access.
+                            populate_audiofile_metadata(new_file)
                         else:
                             new_file = File.objects.create(file=filename)
                         new_message.file.add(new_file)
@@ -456,12 +461,6 @@ class MessageViewSet(viewsets.ViewSet):
                                 videofile_id=new_file.id,
                                 message_id=new_message.id,
                                 user_id=user.id,
-                            )
-                        elif is_audio:
-                            process_audio_task.delay(
-                                audiofile_id=new_file.id,
-                                message_id=new_message.id,
-                                user_id=user.id
                             )
 
                 new_message.save()
