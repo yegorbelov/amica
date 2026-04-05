@@ -185,7 +185,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "purge_soft_deleted_messages_minutely": {
         "task": "apps.Site.tasks.purge_deleted_messages.purge_soft_deleted_messages",
-        "schedule": timedelta(seconds=20),
+        "schedule": timedelta(minutes=15),
     },
 }
 

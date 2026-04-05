@@ -332,20 +332,20 @@ def _attach_storage_file_to_message(
         new_file = File.objects.create(file=filename)
 
     new_message.file.add(new_file)
-    print(
-        "CHUNK_ATTACH",
-        {
-            "message_id": new_message.id,
-            "file_id": getattr(new_file, "id", None),
-            "name": original_name,
-            "mime": resolved_mime,
-            "ext": ext,
-            "video": is_video,
-            "image": is_image,
-            "audio": is_audio,
-        },
-        flush=True,
-    )
+    # print(
+    #     "CHUNK_ATTACH",
+    #     {
+    #         "message_id": new_message.id,
+    #         "file_id": getattr(new_file, "id", None),
+    #         "name": original_name,
+    #         "mime": resolved_mime,
+    #         "ext": ext,
+    #         "video": is_video,
+    #         "image": is_image,
+    #         "audio": is_audio,
+    #     },
+    #     flush=True,
+    # )
     if is_image:
         process_image_task.delay(
             imagefile_id=new_file.id,
@@ -389,17 +389,17 @@ def chunk_bundle_complete_service(
 
     try:
         normalized_ids = [u for u in upload_ids if isinstance(u, str)]
-        print(
-            "CHUNK_COMPLETE",
-            {
-                "chat_id": chat_id,
-                "raw_upload_ids": len(upload_ids)
-                if isinstance(upload_ids, list)
-                else "n/a",
-                "normalized": len(normalized_ids),
-            },
-            flush=True,
-        )
+        # print(
+        #     "CHUNK_COMPLETE",
+        #     {
+        #         "chat_id": chat_id,
+        #         "raw_upload_ids": len(upload_ids)
+        #         if isinstance(upload_ids, list)
+        #         else "n/a",
+        #         "normalized": len(normalized_ids),
+        #     },
+        #     flush=True,
+        # )
         for uid in normalized_ids:
             if not _session_chunks_complete(uid, user.id, chat_id):
                 return {
