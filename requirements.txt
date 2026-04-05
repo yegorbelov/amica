@@ -12,8 +12,6 @@ aiosignal==1.4.0
     # via aiohttp
 amqp==5.3.1
     # via kombu
-anyio==4.12.1
-    # via watchfiles
 asgiref==3.11.0
     # via
     #   channels
@@ -42,7 +40,7 @@ cbor2==5.8.0
     # via
     #   autobahn
     #   webauthn
-celery==5.5.3
+celery==5.6.3
     # via
     #   -r requirements.in
     #   django-celery-beat
@@ -79,7 +77,6 @@ constantly==23.10.4
 cryptography==46.0.3
     # via
     #   autobahn
-    #   google-auth
     #   pyopenssl
     #   service-identity
     #   webauthn
@@ -102,9 +99,7 @@ django==6.0.1
     #   djangorestframework
     #   djangorestframework-simplejwt
 django-appconf==1.2.0
-    # via
-    #   django-imagekit
-    #   django-webauthn
+    # via django-imagekit
 django-celery-beat==2.1.0
     # via -r requirements.in
 django-celery-results==2.6.0
@@ -113,7 +108,7 @@ django-cors-headers==4.9.0
     # via -r requirements.in
 django-csp==4.0
     # via -r requirements.in
-django-environ==0.12.0
+django-environ==0.13.0
     # via -r requirements.in
 django-extensions==4.1
     # via -r requirements.in
@@ -127,8 +122,6 @@ django-sslserver==0.22
     # via -r requirements.in
 django-timezone-field==4.2.3
     # via django-celery-beat
-django-webauthn==0.0.2
-    # via -r requirements.in
 djangorestframework==3.16.1
     # via
     #   -r requirements.in
@@ -141,8 +134,6 @@ frozenlist==1.8.0
     #   aiosignal
 geoip2==5.2.0
     # via -r requirements.in
-google-auth==2.48.0
-    # via -r requirements.in
 gprof2dot==2025.4.14
     # via django-silk
 hyperlink==21.0.0
@@ -151,14 +142,13 @@ hyperlink==21.0.0
     #   twisted
 idna==3.11
     # via
-    #   anyio
     #   hyperlink
     #   requests
     #   twisted
     #   yarl
 incremental==24.11.0
     # via twisted
-kombu==5.5.4
+kombu==5.6.2
     # via celery
 maxminddb==3.0.0
     # via geoip2
@@ -186,7 +176,7 @@ pathspec==1.0.3
     # via black
 pilkit==3.0
     # via django-imagekit
-pillow==12.1.0
+pillow==12.2.0
     # via
     #   -r requirements.in
     #   pilkit
@@ -205,12 +195,9 @@ py-ubjson==0.16.1
 pyasn1==0.6.1
     # via
     #   pyasn1-modules
-    #   rsa
     #   service-identity
 pyasn1-modules==0.4.2
-    # via
-    #   google-auth
-    #   service-identity
+    # via service-identity
 pycparser==2.23
     # via cffi
 pydub==0.25.1
@@ -233,12 +220,10 @@ redis==7.1.0
     # via
     #   -r requirements.in
     #   channels-redis
-requests==2.32.5
+requests==2.33.1
     # via
     #   -r requirements.in
     #   geoip2
-rsa==4.9.1
-    # via google-auth
 service-identity==24.2.0
     # via twisted
 six==1.17.0
@@ -255,6 +240,8 @@ typing-extensions==4.15.0
     # via twisted
 tzdata==2025.3
     # via kombu
+tzlocal==5.3.1
+    # via celery
 ujson==5.11.0
     # via autobahn
 urllib3==2.5.0
@@ -266,8 +253,6 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-watchfiles==1.1.1
-    # via -r requirements.in
 wcwidth==0.2.14
     # via prompt-toolkit
 webauthn==2.7.0

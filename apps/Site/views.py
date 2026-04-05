@@ -393,7 +393,29 @@ class MessageViewSet(viewsets.ViewSet):
                         )
 
                         mime_type, _ = guess_type(uploaded_file.name)
-                        if mime_type and mime_type.startswith("image/"):
+                        resolved_mime = (mime_type or "").strip().lower()
+                        ext = os.path.splitext((uploaded_file.name or "").lower())[1]
+                        is_video = resolved_mime.startswith("video/") or ext in {
+                            ".mp4",
+                            ".mov",
+                            ".avi",
+                            ".webm",
+                            ".mkv",
+                            ".mpeg",
+                            ".flv",
+                            ".m4v",
+                            ".ts",
+                            ".vob",
+                            ".3gp",
+                            ".3g2",
+                            ".m4p",
+                            ".m4b",
+                            ".m4r",
+                        }
+                        is_image = resolved_mime.startswith("image/")
+                        is_audio = resolved_mime.startswith("audio/")
+
+                        if is_image:
                             from apps.media_files.tasks.audio_waveform import (
                                 process_image_task,
                             )
@@ -401,7 +423,7 @@ class MessageViewSet(viewsets.ViewSet):
                             needs_processing = True
                             new_file = ImageFile(file=filename)
                             new_file.save(process_media=False)
-                        elif mime_type and mime_type.startswith("video/"):
+                        elif is_video:
                             from apps.media_files.tasks.audio_waveform import (
                                 process_video_task,
                             )
@@ -409,7 +431,7 @@ class MessageViewSet(viewsets.ViewSet):
                             needs_processing = True
                             new_file = VideoFile(file=filename)
                             new_file.save(process_media=False)
-                        elif mime_type and mime_type.startswith("audio/"):
+                        elif is_audio:
                             from apps.media_files.models import AudioFile
                             from apps.media_files.tasks.audio_waveform import process_audio_task
                             needs_processing = True
@@ -417,19 +439,19 @@ class MessageViewSet(viewsets.ViewSet):
                         else:
                             new_file = File.objects.create(file=filename)
                         new_message.file.add(new_file)
-                        if mime_type and mime_type.startswith("image/"):
+                        if is_image:
                             process_image_task.delay(
                                 imagefile_id=new_file.id,
                                 message_id=new_message.id,
                                 user_id=user.id,
                             )
-                        elif mime_type and mime_type.startswith("video/"):
+                        elif is_video:
                             process_video_task.delay(
                                 videofile_id=new_file.id,
                                 message_id=new_message.id,
                                 user_id=user.id,
                             )
-                        elif mime_type and mime_type.startswith("audio/"):
+                        elif is_audio:
                             process_audio_task.delay(
                                 audiofile_id=new_file.id,
                                 message_id=new_message.id,
