@@ -557,7 +557,7 @@ class AppConsumer(BaseConsumer):
                 cursor_newer=cursor_newer,
                 page_size=page_size,
             )
-            await self.send_json({"type": "chat", "chat_id": chat_id, **result})
+            await self.send_json({"chat_id": chat_id, **result, "type": "chat"})
         except Chat.DoesNotExist:
             await self.send_json(
                 {"type": "error", "message": "Chat not found"}

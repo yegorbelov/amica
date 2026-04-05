@@ -530,16 +530,27 @@ class ChatUserSerializer(serializers.ModelSerializer):
 
 
 class ChatSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    type = serializers.CharField(source="chat_type")
+    primary_media = serializers.SerializerMethodField()
+    info = serializers.SerializerMethodField()
     messages = MessageSerializer(many=True, read_only=True)
     media = serializers.SerializerMethodField()
     members = serializers.SerializerMethodField()
+    peer_user_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Chat
         fields = [
+            "id",
+            "name",
+            "type",
+            "primary_media",
+            "info",
             "messages",
             "media",
             "members",
+            "peer_user_id",
         ]
 
     def get_members(self, obj):
@@ -668,6 +679,26 @@ class ChatSerializer(serializers.ModelSerializer):
 
         media_items = list(dict.fromkeys(media_items))
         return DisplayMediaSerializer(media_items, many=True, context=self.context).data
+
+    def get_name(self, obj):
+        return self._get_display_cached(obj)["name"]
+
+    def get_primary_media(self, obj):
+        avatar = self._get_display_cached(obj)["avatar"]
+        if isinstance(avatar, DisplayMedia):
+            return DisplayMediaChatListSerializer(avatar, context=self.context).data
+        return None
+
+    def get_info(self, obj):
+        if obj.is_dialog:
+            return self._get_display_cached(obj)["last_seen"]
+        return len(obj.users.all())
+
+    def get_peer_user_id(self, obj):
+        if not obj.is_dialog:
+            return None
+        interlocutor = self._get_interlocutor_cached(obj)
+        return interlocutor.id if interlocutor else None
 
 
 from django.conf import settings
