@@ -1,0 +1,38 @@
+# Core
+Django==6.0.*
+djangorestframework==3.16.*
+djangorestframework-simplejwt==5.5.*
+django-csp==4.0
+
+# Database
+psycopg2-binary==2.9.*
+
+# HTTP
+requests==2.33.*
+urllib3==2.5.*
+
+# Real-time
+channels==4.3.*
+daphne==4.2.*
+channels_redis==4.3.*
+redis==7.*
+
+# Background tasks
+celery==5.6.*
+django-celery-beat
+django-celery-results==2.6.0
+
+# Media processing
+pillow==12.2.0
+django-imagekit==6.0.0
+django-polymorphic==4.1.0
+pydub==0.25.1
+numpy==2.4.1
+audioop-lts==0.2.2
+mutagen==1.47.0
+
+# Runtime config and integrations
+django-environ==0.13.0
+django-cors-headers==4.9.0
+webauthn==2.7.0
+geoip2==5.2.0

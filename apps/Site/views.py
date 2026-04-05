@@ -430,7 +430,9 @@ class MessageViewSet(viewsets.ViewSet):
 
                             needs_processing = True
                             new_file = VideoFile(file=filename)
-                            new_file.save(process_media=False)
+                            # Populate width/height immediately so prod does not
+                            # depend on Celery timing/worker file access.
+                            new_file.save(process_media=True)
                         elif is_audio:
                             from apps.media_files.models import AudioFile
                             from apps.media_files.tasks.audio_waveform import process_audio_task
