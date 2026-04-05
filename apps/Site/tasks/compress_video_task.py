@@ -10,6 +10,12 @@ from apps.media_files.models.models import DisplayVideo, VideoFile
 
 logger = logging.getLogger(__name__)
 
+# Speed-focused encoding profile with acceptable quality/size.
+VIDEO_CRF = "27"
+VIDEO_PRESET = "faster"
+VIDEO_PROFILE = "main"
+VIDEO_LEVEL = "4.0"
+
 
 def compress_video_sync(model_name: str, video_id: int):
     logger.info(f"Compressing {model_name} id={video_id}")
@@ -46,7 +52,7 @@ def compress_video_sync(model_name: str, video_id: int):
             audio_option = ["-an"]
         else:
             duration_option = []
-            scale_option = ["-vf", "scale=800:-2"]
+            scale_option = ["-vf", "scale=1280:-2"]
             audio_option = ["-c:a", "aac", "-b:a", "128k", "-profile:a", "aac_low"]
 
         # Chat / VideoFile: progressive MP4 (moov at start) — fewer Range round-trips in
@@ -72,18 +78,18 @@ def compress_video_sync(model_name: str, video_id: int):
             *audio_option,
             "-c:v",
             "libx264",
+            "-threads",
+            "0",
             "-profile:v",
-            "baseline",
+            VIDEO_PROFILE,
             "-level",
-            "3.0",
+            VIDEO_LEVEL,
             "-preset",
-            "medium",
-            "-b:v",
-            "2M",
-            "-maxrate",
-            "2.5M",
-            "-bufsize",
-            "3M",
+            VIDEO_PRESET,
+            "-crf",
+            VIDEO_CRF,
+            "-pix_fmt",
+            "yuv420p",
             "-g",
             "25",
             "-keyint_min",
