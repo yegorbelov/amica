@@ -18,6 +18,10 @@ VIDEO_LEVEL = "4.0"
 VIDEO_THREADS = "2"
 
 
+class FfmpegCompressionError(RuntimeError):
+    pass
+
+
 def compress_video_sync(model_name: str, video_id: int):
     logger.info(f"Compressing {model_name} id={video_id}")
     model_map = {
@@ -119,7 +123,7 @@ def compress_video_sync(model_name: str, video_id: int):
                 video_path,
                 stderr_text.strip()[:4000],
             )
-            raise RuntimeError(
+            raise FfmpegCompressionError(
                 f"ffmpeg failed with exit code {ffmpeg_err.returncode}"
             ) from ffmpeg_err
 
@@ -208,6 +212,37 @@ def compress_video_sync(model_name: str, video_id: int):
 def compress_video_task(self, model_name: str, video_id: int):
     try:
         return compress_video_sync(model_name, video_id)
+    except FfmpegCompressionError as e:
+        logger.error(
+            "Compression skipped for %s id=%s: %s",
+            model_name,
+            video_id,
+            e,
+        )
+        if model_name == "VideoFile":
+            # Keep original file; make sure client still gets metadata.
+            try:
+                video_instance = VideoFile.objects.get(id=video_id)
+                video_instance.populate_video_metadata()
+                video_instance.save(
+                    update_fields=["file_size", "width", "height", "has_audio"]
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to populate metadata after compression skip for VideoFile id=%s",
+                    video_id,
+                )
+        elif model_name == "DisplayVideo":
+            try:
+                video_instance = DisplayVideo.objects.get(id=video_id)
+                video_instance.status = "failed"
+                video_instance.save(update_fields=["status"])
+            except Exception:
+                logger.exception(
+                    "Failed to mark DisplayVideo id=%s as failed after compression skip",
+                    video_id,
+                )
+        return {"status": "skipped", "reason": str(e)}
     except Exception as e:
         logger.exception(f"Failed to compress video {model_name} id={video_id}: {e}")
         model_map = {
