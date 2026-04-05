@@ -10,6 +10,7 @@ import math
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Tuple
 
 from django.conf import settings
@@ -33,6 +34,8 @@ WS_SERVER_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 MIN_CLIENT_CHUNK_SIZE = 64 * 1024  # 64 KiB
 MAX_CLIENT_CHUNK_SIZE = SERVER_CHUNK_SIZE
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB, same as MessageViewSet.create
+MERGE_COPY_BUFFER_BYTES = 1024 * 1024
+MERGE_MAX_WORKERS = 4
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
 
@@ -241,10 +244,10 @@ def _merge_session_to_storage(
             part_path = os.path.join(base, f"{i}.part")
             if not os.path.isfile(part_path):
                 return None
+            part_size = os.path.getsize(part_path)
             with open(part_path, "rb") as inp:
-                blob = inp.read()
-                out.write(blob)
-                written += len(blob)
+                shutil.copyfileobj(inp, out, length=MERGE_COPY_BUFFER_BYTES)
+                written += part_size
 
     if written != total_size:
         logger.warning(
@@ -283,7 +286,7 @@ def _attach_storage_file_to_message(
     mime_type: str = "",
     media_kind: str = "",
 ):
-    """Mirror MessageViewSet.create file branch (filename = path from protected_storage.save)."""
+    """Attach file model quickly; heavy metadata/thumbnail work runs in background tasks."""
     resolved_mime = (mime_type or "").strip().lower()
     if not resolved_mime:
         guessed_mime, _ = guess_type(original_name)
@@ -322,28 +325,25 @@ def _attach_storage_file_to_message(
     needs_processing = False
 
     if is_image:
+        from apps.media_files.tasks.audio_waveform import process_image_task
+
         needs_processing = True
         new_file = ImageFile(file=filename)
-        # Populate image metadata/thumbnails immediately so prod does not
-        # depend on Celery timing/worker file access.
-        new_file.save(process_media=True)
+        # Fast-path complete: defer metadata + thumbnails to background.
+        new_file.save(process_media=False)
     elif is_video:
         from apps.media_files.tasks.audio_waveform import process_video_task
 
         needs_processing = True
         new_file = VideoFile(file=filename)
-        # Populate width/height immediately so prod does not depend on Celery
-        # timing/worker file access.
-        new_file.save(process_media=True)
+        # Fast-path complete: defer metadata extraction to background.
+        new_file.save(process_media=False)
     elif is_audio:
         from apps.media_files.models import AudioFile
-        from apps.media_files.tasks.audio_waveform import populate_audiofile_metadata
+        from apps.media_files.tasks.audio_waveform import process_audio_task
 
         needs_processing = True
         new_file = AudioFile.objects.create(file=filename)
-        # Populate audio metadata/cover immediately so prod does not depend on
-        # Celery timing/worker file access.
-        populate_audiofile_metadata(new_file)
     else:
         new_file = File.objects.create(file=filename)
 
@@ -362,9 +362,21 @@ def _attach_storage_file_to_message(
     #     },
     #     flush=True,
     # )
-    if is_video:
+    if is_image:
+        process_image_task.delay(
+            imagefile_id=new_file.id,
+            message_id=new_message.id,
+            user_id=user.id,
+        )
+    elif is_video:
         process_video_task.delay(
             videofile_id=new_file.id,
+            message_id=new_message.id,
+            user_id=user.id,
+        )
+    elif is_audio:
+        process_audio_task.delay(
+            audiofile_id=new_file.id,
             message_id=new_message.id,
             user_id=user.id,
         )
@@ -412,21 +424,51 @@ def chunk_bundle_complete_service(
                     "http_status": 400,
                 }
 
-        merged_files: list[Tuple[str, str, str, str]] = []
-        for uid in normalized_ids:
-            merged = _merge_session_to_storage(uid, user.id, chat_id)
-            if not merged:
-                for path, _, _, _ in merged_files:
-                    try:
-                        protected_storage.delete(path)
-                    except Exception:
-                        pass
-                return {
-                    "ok": False,
-                    "error": f"Failed to assemble upload {uid}",
-                    "http_status": 400,
-                }
-            merged_files.append(merged)
+        merged_by_uid: dict[str, Tuple[str, str, str, str]] = {}
+        failed_uid: Optional[str] = None
+        workers = min(MERGE_MAX_WORKERS, max(1, len(normalized_ids)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_merge_session_to_storage, uid, user.id, chat_id): uid
+                for uid in normalized_ids
+            }
+            for future in as_completed(futures):
+                uid = futures[future]
+                try:
+                    merged = future.result()
+                except Exception:
+                    logger.exception("merge failed for upload_id=%s", uid)
+                    failed_uid = uid
+                    merged = None
+                if not merged:
+                    failed_uid = failed_uid or uid
+                    continue
+                merged_by_uid[uid] = merged
+
+        if failed_uid:
+            for path, _, _, _ in merged_by_uid.values():
+                try:
+                    protected_storage.delete(path)
+                except Exception:
+                    pass
+            return {
+                "ok": False,
+                "error": f"Failed to assemble upload {failed_uid}",
+                "http_status": 400,
+            }
+
+        merged_files = [merged_by_uid[uid] for uid in normalized_ids if uid in merged_by_uid]
+        if len(merged_files) != len(normalized_ids):
+            for path, _, _, _ in merged_files:
+                try:
+                    protected_storage.delete(path)
+                except Exception:
+                    pass
+            return {
+                "ok": False,
+                "error": "Failed to assemble uploads",
+                "http_status": 400,
+            }
 
         new_message = Message.objects.create(value=message_text, user=user, chat=chat)
         for storage_path, orig_name, mime_type, media_kind in merged_files:

@@ -44,8 +44,8 @@ from .base_consumer import BaseConsumer
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_BROADCASTS = 50
-WS_CHUNK_ACK_BATCH_SIZE = 4
-WS_CHUNK_ACK_MAX_DELAY_MS = 120
+WS_CHUNK_ACK_BATCH_SIZE = 6
+WS_CHUNK_ACK_MAX_DELAY_MS = 90
 
 
 class AppConsumer(BaseConsumer):
