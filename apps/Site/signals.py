@@ -98,10 +98,6 @@ def video_file_post_save(sender, instance, created, **kwargs):
     if not created or not instance.file:
         return
 
-    # Message upload flows may run compression synchronously before publishing WS.
-    if getattr(instance, "_skip_auto_compress", False):
-        return
-
     def enqueue():
         compress_video_task.delay("VideoFile", instance.pk)
         logger.info(f"Scheduled compression for VideoFile {instance.pk}")

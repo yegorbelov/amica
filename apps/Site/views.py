@@ -382,13 +382,8 @@ class MessageViewSet(viewsets.ViewSet):
                 
                 needs_processing = False
                 created_audio_file = None
-                video_ids_to_compress: list[int] = []
 
                 if files:
-                    from apps.Site.tasks.compress_video_task import (
-                        compress_video_sync,
-                    )
-
                     for uploaded_file in files:
                         if uploaded_file.size > MAX_FILE_SIZE:
                             continue
@@ -413,9 +408,7 @@ class MessageViewSet(viewsets.ViewSet):
 
                             needs_processing = True
                             new_file = VideoFile(file=filename)
-                            new_file._skip_auto_compress = True
                             new_file.save(process_media=False)
-                            video_ids_to_compress.append(new_file.id)
                         elif mime_type and mime_type.startswith("audio/"):
                             from apps.media_files.models import AudioFile
                             from apps.media_files.tasks.audio_waveform import process_audio_task
@@ -442,10 +435,6 @@ class MessageViewSet(viewsets.ViewSet):
                                 message_id=new_message.id,
                                 user_id=user.id
                             )
-
-                if video_ids_to_compress:
-                    for video_id in video_ids_to_compress:
-                        compress_video_sync("VideoFile", video_id)
 
                 new_message.save()
                 

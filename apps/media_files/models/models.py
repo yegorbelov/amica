@@ -212,7 +212,7 @@ class File(PolymorphicModel):
                 self.name = os.path.basename(self.file.name)
             if not self.extension:
                 self.extension = os.path.splitext(self.original_name)[1].lower()
-            if not self.file_size and self.file.size:
+            if self.file.size:
                 self.file_size = self.file.size
             if not self.category:
                 self.category = self.determine_category(self.extension)

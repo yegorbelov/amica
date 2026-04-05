@@ -321,7 +321,6 @@ def _attach_storage_file_to_message(
 
         needs_processing = True
         new_file = VideoFile(file=filename)
-        new_file._skip_auto_compress = True
         new_file.save(process_media=False)
     elif is_audio:
         from apps.media_files.models import AudioFile
@@ -430,16 +429,6 @@ def chunk_bundle_complete_service(
             _attach_storage_file_to_message(
                 new_message, user, storage_path, orig_name, mime_type, media_kind
             )
-
-        from apps.Site.tasks.compress_video_task import compress_video_sync
-
-        video_ids_to_compress = list(
-            VideoFile.objects.filter(
-                id__in=new_message.file.values_list("id", flat=True)
-            ).values_list("id", flat=True)
-        )
-        for video_id in video_ids_to_compress:
-            compress_video_sync("VideoFile", video_id)
 
         new_message.save()
 

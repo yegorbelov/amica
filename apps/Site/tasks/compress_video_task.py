@@ -15,6 +15,7 @@ VIDEO_CRF = "27"
 VIDEO_PRESET = "faster"
 VIDEO_PROFILE = "main"
 VIDEO_LEVEL = "4.0"
+VIDEO_THREADS = "2"
 
 
 def compress_video_sync(model_name: str, video_id: int):
@@ -69,6 +70,9 @@ def compress_video_sync(model_name: str, video_id: int):
         cmd = [
             "ffmpeg",
             "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-fflags",
             "+genpts",
             "-i",
@@ -79,7 +83,7 @@ def compress_video_sync(model_name: str, video_id: int):
             "-c:v",
             "libx264",
             "-threads",
-            "0",
+            VIDEO_THREADS,
             "-profile:v",
             VIDEO_PROFILE,
             "-level",

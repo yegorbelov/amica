@@ -1,3 +1,4 @@
+from django.urls import reverse
 from rest_framework import serializers
 
 from ..models import *
@@ -176,16 +177,13 @@ class FileSerializer(serializers.ModelSerializer):
     def get_file_url(self, obj):
         request = self.context.get("request")
         if obj.file:
+            # Version segment busts browser cache when bytes change in place (same id).
+            v = str(obj.file_size) if obj.file_size else str(obj.pk)
+            url = reverse("protected-file-versioned", args=[obj.id, v])
             if request:
-                return request.build_absolute_uri(
-                    reverse("protected-file-default", args=[obj.id])
-                )
-            else:
-                return reverse("protected-file-default", args=[obj.id])
+                return request.build_absolute_uri(url)
+            return url
         return None
-
-
-from django.urls import reverse
 
 
 class ImageFileSerializer(FileSerializer):
@@ -249,9 +247,6 @@ class VideoFileSerializer(FileSerializer):
 
     # def get_duration(self, obj):
     #     return getattr(obj, 'duration', None)
-
-
-from django.urls import reverse
 
 
 class AudioFileSerializer(FileSerializer):
