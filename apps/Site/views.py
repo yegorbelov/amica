@@ -413,7 +413,15 @@ class MessageViewSet(viewsets.ViewSet):
                             ".m4r",
                         }
                         is_image = resolved_mime.startswith("image/")
-                        is_audio = resolved_mime.startswith("audio/")
+                        is_audio = resolved_mime.startswith("audio/") or ext in {
+                            ".mp3",
+                            ".wav",
+                            ".ogg",
+                            ".flac",
+                            ".m4a",
+                            ".aac",
+                            ".wma",
+                        }
 
                         if is_image:
                             from apps.media_files.tasks.audio_waveform import (
@@ -422,7 +430,9 @@ class MessageViewSet(viewsets.ViewSet):
 
                             needs_processing = True
                             new_file = ImageFile(file=filename)
-                            new_file.save(process_media=False)
+                            # Populate image metadata/thumbnails immediately so prod
+                            # does not depend on Celery timing/worker file access.
+                            new_file.save(process_media=True)
                         elif is_video:
                             from apps.media_files.tasks.audio_waveform import (
                                 process_video_task,
@@ -441,13 +451,7 @@ class MessageViewSet(viewsets.ViewSet):
                         else:
                             new_file = File.objects.create(file=filename)
                         new_message.file.add(new_file)
-                        if is_image:
-                            process_image_task.delay(
-                                imagefile_id=new_file.id,
-                                message_id=new_message.id,
-                                user_id=user.id,
-                            )
-                        elif is_video:
+                        if is_video:
                             process_video_task.delay(
                                 videofile_id=new_file.id,
                                 message_id=new_message.id,

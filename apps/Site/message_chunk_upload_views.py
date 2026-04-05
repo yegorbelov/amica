@@ -302,20 +302,23 @@ def _attach_storage_file_to_message(
         ".m4r",
     }
     is_image = declared_kind == "image" or resolved_mime.startswith("image/")
-    is_audio = declared_kind == "audio" or resolved_mime.startswith("audio/")
+    is_audio = declared_kind == "audio" or resolved_mime.startswith("audio/") or ext in {
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".m4a",
+        ".aac",
+        ".wma",
+    }
     needs_processing = False
 
     if is_image:
-        from apps.media_files.tasks.audio_waveform import process_image_task
-
         needs_processing = True
         new_file = ImageFile(file=filename)
-        new_file.save(process_media=False)
-        process_image_task.delay(
-            imagefile_id=new_file.id,
-            message_id=new_message.id,
-            user_id=user.id,
-        )
+        # Populate image metadata/thumbnails immediately so prod does not
+        # depend on Celery timing/worker file access.
+        new_file.save(process_media=True)
     elif is_video:
         from apps.media_files.tasks.audio_waveform import process_video_task
 
@@ -348,13 +351,7 @@ def _attach_storage_file_to_message(
     #     },
     #     flush=True,
     # )
-    if is_image:
-        process_image_task.delay(
-            imagefile_id=new_file.id,
-            message_id=new_message.id,
-            user_id=user.id,
-        )
-    elif is_video:
+    if is_video:
         process_video_task.delay(
             videofile_id=new_file.id,
             message_id=new_message.id,
