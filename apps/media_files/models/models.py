@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from io import BytesIO
@@ -303,6 +304,33 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _display_dimensions_from_ffprobe_video_stream(stream: dict) -> tuple[int | None, int | None]:
+    """Coded size adjusted for rotation metadata (common on phone video)."""
+    w, h = stream.get("width"), stream.get("height")
+    if not w or not h:
+        return None, None
+    wi, hi = int(w), int(h)
+    rotation = None
+    tags = stream.get("tags") or {}
+    if "rotate" in tags:
+        try:
+            rotation = int(tags["rotate"])
+        except (TypeError, ValueError):
+            pass
+    if rotation is None:
+        for sd in stream.get("side_data_list") or []:
+            r = sd.get("rotation")
+            if r is not None:
+                try:
+                    rotation = int(r)
+                except (TypeError, ValueError):
+                    continue
+                break
+    if rotation is not None and abs(rotation) % 180 == 90:
+        wi, hi = hi, wi
+    return wi, hi
+
+
 class VideoFile(File):
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
@@ -310,40 +338,36 @@ class VideoFile(File):
     has_audio = models.BooleanField(null=True, blank=True)
 
     def populate_video_metadata(self):
-        if self.file and (self.width is None or self.height is None):
-            try:
-                file_path = self.file.storage.path(self.file.name)
-                cmd = [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=width,height",
-                    "-of",
-                    "csv=s=x:p=0",
-                    file_path,
-                ]
-                output = subprocess.check_output(cmd).decode().strip()
-                w, h = map(int, output.split("x"))
+        if not self.file:
+            return
+        try:
+            file_path = self.file.storage.path(self.file.name)
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                file_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            probe_data = json.loads(result.stdout)
+            streams = probe_data.get("streams", [])
+
+            w, h = None, None
+            has_audio = False
+            for stream in streams:
+                if stream.get("codec_type") == "video" and w is None:
+                    w, h = _display_dimensions_from_ffprobe_video_stream(stream)
+                if stream.get("codec_type") == "audio":
+                    has_audio = True
+
+            if w is not None and h is not None:
                 self.width, self.height = w, h
-                cmd_audio = [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "a",
-                    "-show_entries",
-                    "stream=index",
-                    "-of",
-                    "csv=p=0",
-                    file_path,
-                ]
-                audio_output = subprocess.check_output(cmd_audio).decode().strip()
-                self.has_audio = bool(audio_output)
-            except Exception as e:
-                logger.error(f"Video processing failed for {self.file.name}: {e}")
+            self.has_audio = has_audio
+        except Exception as e:
+            logger.error(f"Video processing failed for {self.file.name}: {e}")
 
     def save(self, *args, **kwargs):
         process_media = kwargs.pop("process_media", True)

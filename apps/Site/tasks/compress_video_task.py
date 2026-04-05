@@ -167,8 +167,8 @@ def compress_video_sync(model_name: str, video_id: int):
             except Exception as probe_err:
                 logger.error(f"Unexpected error during probe parsing: {probe_err}")
 
-        video_instance.has_audio = has_audio
-        video_instance.save(update_fields=["has_audio", "status"])
+        # DisplayVideo has status only (no has_audio on model). VideoFile returns earlier.
+        video_instance.save(update_fields=["status"])
 
         logger.info(f"Video {video_id} compressed successfully")
         return {"status": "done"}
