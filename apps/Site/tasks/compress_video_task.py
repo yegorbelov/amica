@@ -11,8 +11,7 @@ from apps.media_files.models.models import DisplayVideo, VideoFile
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, retry_backoff=True)
-def compress_video_task(self, model_name: str, video_id: int):
+def compress_video_sync(model_name: str, video_id: int):
     logger.info(f"Compressing {model_name} id={video_id}")
     model_map = {
         "DisplayVideo": DisplayVideo,
@@ -163,17 +162,31 @@ def compress_video_task(self, model_name: str, video_id: int):
 
         logger.info(f"Video {video_id} compressed successfully")
         return {"status": "done"}
-
-    except Exception as e:
-        logger.error(f"Failed to compress video {model_name} id={video_id}: {e}")
-        if video_instance and hasattr(video_instance, "status"):
-            video_instance.status = "failed"
-            video_instance.save(update_fields=["status"])
-        raise self.retry(countdown=5)
-
     finally:
         if temp_output and os.path.exists(temp_output):
             try:
                 os.remove(temp_output)
             except Exception as e:
                 logger.warning(f"Could not remove temp file: {e}")
+
+
+@shared_task(bind=True, max_retries=3, retry_backoff=True)
+def compress_video_task(self, model_name: str, video_id: int):
+    try:
+        return compress_video_sync(model_name, video_id)
+    except Exception as e:
+        logger.error(f"Failed to compress video {model_name} id={video_id}: {e}")
+        model_map = {
+            "DisplayVideo": DisplayVideo,
+            "VideoFile": VideoFile,
+        }
+        ModelClass = model_map.get(model_name)
+        if ModelClass and hasattr(ModelClass, "status"):
+            try:
+                video_instance = ModelClass.objects.get(id=video_id)
+                if hasattr(video_instance, "status"):
+                    video_instance.status = "failed"
+                    video_instance.save(update_fields=["status"])
+            except Exception:
+                pass
+        raise self.retry(countdown=5)

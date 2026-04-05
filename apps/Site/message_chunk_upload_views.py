@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 CHUNK_UPLOAD_SUBDIR = "chunk_uploads"
 SERVER_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
-# Smaller parts for WebSocket (base64 JSON); keeps frames under typical proxy limits.
-WS_SERVER_CHUNK_SIZE = 512 * 1024  # 512 KiB
+# WebSocket uses binary frames; larger chunks reduce round-trip overhead.
+WS_SERVER_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB, same as MessageViewSet.create
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
@@ -321,6 +321,7 @@ def _attach_storage_file_to_message(
 
         needs_processing = True
         new_file = VideoFile(file=filename)
+        new_file._skip_auto_compress = True
         new_file.save(process_media=False)
     elif is_audio:
         from apps.media_files.models import AudioFile
@@ -429,6 +430,16 @@ def chunk_bundle_complete_service(
             _attach_storage_file_to_message(
                 new_message, user, storage_path, orig_name, mime_type, media_kind
             )
+
+        from apps.Site.tasks.compress_video_task import compress_video_sync
+
+        video_ids_to_compress = list(
+            VideoFile.objects.filter(
+                id__in=new_message.file.values_list("id", flat=True)
+            ).values_list("id", flat=True)
+        )
+        for video_id in video_ids_to_compress:
+            compress_video_sync("VideoFile", video_id)
 
         new_message.save()
 

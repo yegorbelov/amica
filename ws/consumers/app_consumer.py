@@ -45,6 +45,7 @@ class AppConsumer(BaseConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.chat_users_cache = {}
+        self.pending_chunk_parts = {}
 
     async def handle_message(self, data):
         message_type = data.get("type")
@@ -1318,9 +1319,6 @@ class AppConsumer(BaseConsumer):
         await self.send_json(payload)
 
     async def handle_message_chunk_part(self, data):
-        import base64
-        import binascii
-
         from apps.Site.message_chunk_upload_views import chunk_part_service
 
         request_id = data.get("request_id")
@@ -1340,32 +1338,83 @@ class AppConsumer(BaseConsumer):
             return
 
         chunk_b64 = d.get("chunk_b64")
-        if not isinstance(chunk_b64, str):
+        if isinstance(chunk_b64, str):
+            import base64
+            import binascii
+
+            try:
+                raw = base64.b64decode(chunk_b64, validate=True)
+            except (ValueError, binascii.Error):
+                await self.send_json(
+                    {
+                        "type": "message_chunk_part_response",
+                        "request_id": request_id,
+                        "ok": False,
+                        "error": "Invalid base64 chunk",
+                    }
+                )
+                return
+
+            result = await sync_to_async(chunk_part_service)(
+                self.user, upload_id, chunk_index, raw
+            )
+            payload: dict = {
+                "type": "message_chunk_part_response",
+                "request_id": request_id,
+            }
+            if result.get("ok"):
+                payload.update(ok=True, chunk_index=result["chunk_index"])
+            else:
+                payload.update(ok=False, error=result.get("error", "error"))
+            await self.send_json(payload)
+            return
+
+        if not isinstance(request_id, int):
             await self.send_json(
                 {
                     "type": "message_chunk_part_response",
                     "request_id": request_id,
                     "ok": False,
-                    "error": "chunk_b64 required",
+                    "error": "request_id required",
                 }
             )
             return
 
-        try:
-            raw = base64.b64decode(chunk_b64, validate=True)
-        except (ValueError, binascii.Error):
+        # Binary path: metadata arrives as JSON, raw bytes follow in next binary frame.
+        self.pending_chunk_parts[request_id] = {
+            "upload_id": upload_id,
+            "chunk_index": chunk_index,
+        }
+
+    async def handle_binary(self, bytes_data):
+        from apps.Site.message_chunk_upload_views import chunk_part_service
+
+        if not bytes_data or len(bytes_data) < 4:
+            await self.send_json(
+                {
+                    "type": "message_chunk_part_response",
+                    "ok": False,
+                    "error": "Invalid binary chunk frame",
+                }
+            )
+            return
+
+        request_id = int.from_bytes(bytes_data[:4], byteorder="big", signed=False)
+        meta = self.pending_chunk_parts.pop(request_id, None)
+        if not meta:
             await self.send_json(
                 {
                     "type": "message_chunk_part_response",
                     "request_id": request_id,
                     "ok": False,
-                    "error": "Invalid base64 chunk",
+                    "error": "Missing chunk metadata",
                 }
             )
             return
 
+        raw = bytes_data[4:]
         result = await sync_to_async(chunk_part_service)(
-            self.user, upload_id, chunk_index, raw
+            self.user, meta.get("upload_id"), int(meta.get("chunk_index", -1)), raw
         )
         payload: dict = {"type": "message_chunk_part_response", "request_id": request_id}
         if result.get("ok"):

@@ -64,7 +64,19 @@ class BaseConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("Disconnection error")
 
-    async def receive(self, text_data):
+    async def receive(self, text_data=None, bytes_data=None):
+        if bytes_data is not None:
+            if not self.scope.get("auth_valid") or not await self._is_session_active():
+                await self.close(code=4003)
+                return
+            await self.touch_session()
+            try:
+                await self.handle_binary(bytes_data)
+            except Exception as e:
+                logger.error("Error in handle_binary: %s\n%s", e, traceback.format_exc())
+                await self.send_json({"type": "error", "message": "Internal server error"})
+            return
+
         try:
             data = json.loads(text_data)
         except json.JSONDecodeError:
@@ -124,6 +136,9 @@ class BaseConsumer(AsyncWebsocketConsumer):
 
     async def handle_message(self, data):
         raise NotImplementedError("handle_message must be implemented in subclass")
+
+    async def handle_binary(self, bytes_data):
+        raise NotImplementedError("handle_binary must be implemented in subclass")
 
     async def _handle_auth_upgrade(self, data):
         """Upgrade an anonymous connection with an access token (e.g. after HTTP login)."""
