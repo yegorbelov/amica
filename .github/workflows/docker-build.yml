@@ -33,8 +33,8 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ghcr.io/${{ github.repository_owner }}/amica:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amica-backend
+          cache-to: type=gha,mode=max,scope=amica-backend
 
       # --- Build & push nginx image ---
       - name: Build & push amica-nginx image
@@ -45,5 +45,5 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ghcr.io/${{ github.repository_owner }}/amica-nginx:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amica-nginx
+          cache-to: type=gha,mode=max,scope=amica-nginx

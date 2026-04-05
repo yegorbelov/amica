@@ -2,8 +2,12 @@
 
 FROM python:3.14-slim AS base
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /app
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         libpq-dev \
         postgresql-client \
