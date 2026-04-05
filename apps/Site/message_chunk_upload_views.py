@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 CHUNK_UPLOAD_SUBDIR = "chunk_uploads"
 SERVER_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
+# Smaller parts for WebSocket (base64 JSON); keeps frames under typical proxy limits.
+WS_SERVER_CHUNK_SIZE = 512 * 1024  # 512 KiB
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB, same as MessageViewSet.create
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
@@ -59,6 +61,59 @@ def _session_chunks_complete(upload_id: str, user_id: int, chat_id: int) -> bool
     return True
 
 
+def chunk_init_service(
+    user,
+    chat_id: int,
+    filename: str,
+    mime_type: str,
+    media_kind: str,
+    total_size: int,
+    *,
+    chunk_size: Optional[int] = None,
+) -> dict:
+    """
+    Shared by HTTP and WebSocket. Returns ok + fields or ok=False + error + http_status.
+    """
+    use_chunk = chunk_size if chunk_size is not None else SERVER_CHUNK_SIZE
+    if use_chunk < 1:
+        return {"ok": False, "error": "Invalid chunk_size", "http_status": 400}
+
+    if not chat_id or total_size <= 0 or total_size > MAX_FILE_SIZE:
+        return {"ok": False, "error": "Invalid chat_id or size", "http_status": 400}
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return {"ok": False, "error": "Chat not found", "http_status": 404}
+
+    if not chat.users.filter(id=user.id).exists():
+        return {"ok": False, "error": "User not in chat", "http_status": 403}
+
+    upload_id = str(uuid.uuid4())
+    chunk_count = max(1, math.ceil(total_size / use_chunk))
+
+    os.makedirs(_session_dir(upload_id), exist_ok=True)
+    meta = {
+        "user_id": user.id,
+        "chat_id": chat_id,
+        "filename": filename,
+        "mime_type": mime_type,
+        "media_kind": media_kind,
+        "total_size": total_size,
+        "chunk_count": chunk_count,
+        "chunk_size": use_chunk,
+    }
+    with open(_meta_path(upload_id), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "chunk_count": chunk_count,
+        "chunk_size": use_chunk,
+    }
+
+
 class MessageChunkInitView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -74,42 +129,55 @@ class MessageChunkInitView(APIView):
         media_kind = (data.get("media_kind") or "").strip().lower()
         total_size = int(data.get("total_size") or 0)
 
-        if not chat_id or total_size <= 0 or total_size > MAX_FILE_SIZE:
-            return JsonResponse({"error": "Invalid chat_id or size"}, status=400)
-
-        user = request.user
-        try:
-            chat = Chat.objects.get(id=chat_id)
-        except Chat.DoesNotExist:
-            return JsonResponse({"error": "Chat not found"}, status=404)
-
-        if not chat.users.filter(id=user.id).exists():
-            return JsonResponse({"error": "User not in chat"}, status=403)
-
-        upload_id = str(uuid.uuid4())
-        chunk_count = max(1, math.ceil(total_size / SERVER_CHUNK_SIZE))
-
-        os.makedirs(_session_dir(upload_id), exist_ok=True)
-        meta = {
-            "user_id": user.id,
-            "chat_id": chat_id,
-            "filename": filename,
-            "mime_type": mime_type,
-            "media_kind": media_kind,
-            "total_size": total_size,
-            "chunk_count": chunk_count,
-            "chunk_size": SERVER_CHUNK_SIZE,
-        }
-        with open(_meta_path(upload_id), "w", encoding="utf-8") as f:
-            json.dump(meta, f)
+        result = chunk_init_service(
+            request.user,
+            chat_id,
+            filename,
+            mime_type,
+            media_kind,
+            total_size,
+        )
+        if not result.get("ok"):
+            return JsonResponse(
+                {"error": result.get("error", "error")},
+                status=int(result.get("http_status") or 400),
+            )
 
         return JsonResponse(
             {
-                "upload_id": upload_id,
-                "chunk_count": chunk_count,
-                "chunk_size": SERVER_CHUNK_SIZE,
+                "upload_id": result["upload_id"],
+                "chunk_count": result["chunk_count"],
+                "chunk_size": result["chunk_size"],
             }
         )
+
+
+def chunk_part_service(
+    user, upload_id: str, chunk_index: int, raw_bytes: bytes
+) -> dict:
+    if not upload_id:
+        return {"ok": False, "error": "upload_id and chunk required", "http_status": 400}
+    if raw_bytes is None:
+        raw_bytes = b""
+
+    meta_path = _meta_path(upload_id)
+    if not os.path.isfile(meta_path):
+        return {"ok": False, "error": "Unknown upload_id", "http_status": 404}
+
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+
+    if meta["user_id"] != user.id:
+        return {"ok": False, "error": "Forbidden", "http_status": 403}
+
+    if chunk_index < 0 or chunk_index >= meta["chunk_count"]:
+        return {"ok": False, "error": "chunk_index out of range", "http_status": 400}
+
+    part_path = os.path.join(_session_dir(upload_id), f"{chunk_index}.part")
+    with open(part_path, "wb") as out:
+        out.write(raw_bytes)
+
+    return {"ok": True, "chunk_index": chunk_index}
 
 
 class MessageChunkPartView(APIView):
@@ -126,25 +194,15 @@ class MessageChunkPartView(APIView):
         if not upload_id or chunk_file is None:
             return JsonResponse({"error": "upload_id and chunk required"}, status=400)
 
-        meta_path = _meta_path(upload_id)
-        if not os.path.isfile(meta_path):
-            return JsonResponse({"error": "Unknown upload_id"}, status=404)
+        raw = chunk_file.read()
+        result = chunk_part_service(request.user, upload_id, chunk_index, raw)
+        if not result.get("ok"):
+            return JsonResponse(
+                {"error": result.get("error", "error")},
+                status=int(result.get("http_status") or 400),
+            )
 
-        with open(meta_path, encoding="utf-8") as f:
-            meta = json.load(f)
-
-        if meta["user_id"] != request.user.id:
-            return JsonResponse({"error": "Forbidden"}, status=403)
-
-        if chunk_index < 0 or chunk_index >= meta["chunk_count"]:
-            return JsonResponse({"error": "chunk_index out of range"}, status=400)
-
-        part_path = os.path.join(_session_dir(upload_id), f"{chunk_index}.part")
-        with open(part_path, "wb") as out:
-            for chunk in chunk_file.chunks():
-                out.write(chunk)
-
-        return JsonResponse({"ok": True, "chunk_index": chunk_index})
+        return JsonResponse({"ok": True, "chunk_index": result["chunk_index"]})
 
 
 def _merge_session_to_storage(
@@ -309,6 +367,86 @@ def _attach_storage_file_to_message(
     return needs_processing
 
 
+def chunk_bundle_complete_service(
+    user, chat_id: int, message_text: str, upload_ids: list
+) -> dict:
+    if not chat_id:
+        return {"ok": False, "error": "chat_id required", "http_status": 400}
+
+    if not isinstance(upload_ids, list) or not upload_ids:
+        return {"ok": False, "error": "upload_ids required", "http_status": 400}
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return {"ok": False, "error": "Chat not found", "http_status": 404}
+
+    if not chat.users.filter(id=user.id).exists():
+        return {"ok": False, "error": "User not in chat", "http_status": 403}
+
+    if not message_text and not upload_ids:
+        return {"ok": False, "error": "Message or files required", "http_status": 400}
+
+    try:
+        normalized_ids = [u for u in upload_ids if isinstance(u, str)]
+        print(
+            "CHUNK_COMPLETE",
+            {
+                "chat_id": chat_id,
+                "raw_upload_ids": len(upload_ids)
+                if isinstance(upload_ids, list)
+                else "n/a",
+                "normalized": len(normalized_ids),
+            },
+            flush=True,
+        )
+        for uid in normalized_ids:
+            if not _session_chunks_complete(uid, user.id, chat_id):
+                return {
+                    "ok": False,
+                    "error": f"Incomplete or invalid upload session: {uid}",
+                    "http_status": 400,
+                }
+
+        merged_files: list[Tuple[str, str, str, str]] = []
+        for uid in normalized_ids:
+            merged = _merge_session_to_storage(uid, user.id, chat_id)
+            if not merged:
+                for path, _, _, _ in merged_files:
+                    try:
+                        protected_storage.delete(path)
+                    except Exception:
+                        pass
+                return {
+                    "ok": False,
+                    "error": f"Failed to assemble upload {uid}",
+                    "http_status": 400,
+                }
+            merged_files.append(merged)
+
+        new_message = Message.objects.create(value=message_text, user=user, chat=chat)
+        for storage_path, orig_name, mime_type, media_kind in merged_files:
+            _attach_storage_file_to_message(
+                new_message, user, storage_path, orig_name, mime_type, media_kind
+            )
+
+        new_message.save()
+
+        from apps.Site.services.ws_sender import send_ws_message
+
+        send_ws_message(new_message, user.id)
+
+        return {
+            "ok": True,
+            "status": "success",
+            "message": "Message sent successfully",
+            "message_id": new_message.id,
+        }
+    except Exception as e:
+        logger.exception("chunk_bundle_complete_service: %s", e)
+        return {"ok": False, "error": "Server error", "http_status": 500}
+
+
 class MessageChunkBundleCompleteView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -322,81 +460,19 @@ class MessageChunkBundleCompleteView(APIView):
         message_text = data.get("message") or ""
         upload_ids = data.get("upload_ids") or []
 
-        if not chat_id:
-            return JsonResponse({"error": "chat_id required"}, status=400)
-
-        if not isinstance(upload_ids, list) or not upload_ids:
-            return JsonResponse({"error": "upload_ids required"}, status=400)
-
-        user = request.user
-        try:
-            chat = Chat.objects.get(id=chat_id)
-        except Chat.DoesNotExist:
-            return JsonResponse({"error": "Chat not found"}, status=404)
-
-        if not chat.users.filter(id=user.id).exists():
-            return JsonResponse({"error": "User not in chat"}, status=403)
-
-        if not message_text and not upload_ids:
-            return JsonResponse({"error": "Message or files required"}, status=400)
-
-        try:
-            normalized_ids = [u for u in upload_ids if isinstance(u, str)]
-            print(
-                "CHUNK_COMPLETE",
-                {
-                    "chat_id": chat_id,
-                    "raw_upload_ids": len(upload_ids)
-                    if isinstance(upload_ids, list)
-                    else "n/a",
-                    "normalized": len(normalized_ids),
-                },
-                flush=True,
-            )
-            for uid in normalized_ids:
-                if not _session_chunks_complete(uid, user.id, chat_id):
-                    return JsonResponse(
-                        {"error": f"Incomplete or invalid upload session: {uid}"},
-                        status=400,
-                    )
-
-            merged_files: list[Tuple[str, str, str, str]] = []
-            for uid in normalized_ids:
-                merged = _merge_session_to_storage(uid, user.id, chat_id)
-                if not merged:
-                    for path, _, _, _ in merged_files:
-                        try:
-                            protected_storage.delete(path)
-                        except Exception:
-                            pass
-                    return JsonResponse(
-                        {"error": f"Failed to assemble upload {uid}"}, status=400
-                    )
-                merged_files.append(merged)
-
-            new_message = Message.objects.create(
-                value=message_text, user=user, chat=chat
-            )
-            any_processing = False
-            for storage_path, orig_name, mime_type, media_kind in merged_files:
-                file_needs_processing = _attach_storage_file_to_message(
-                    new_message, user, storage_path, orig_name, mime_type, media_kind
-                )
-                any_processing = any_processing or file_needs_processing
-
-            new_message.save()
-
-            from apps.Site.services.ws_sender import send_ws_message
-
-            send_ws_message(new_message, user.id)
-
+        result = chunk_bundle_complete_service(
+            request.user, chat_id, message_text, upload_ids
+        )
+        if not result.get("ok"):
             return JsonResponse(
-                {
-                    "status": "success",
-                    "message": "Message sent successfully",
-                    "message_id": new_message.id,
-                }
+                {"error": result.get("error", "error")},
+                status=int(result.get("http_status") or 400),
             )
-        except Exception as e:
-            logger.exception("MessageChunkBundleCompleteView: %s", e)
-            return JsonResponse({"error": "Server error"}, status=500)
+
+        return JsonResponse(
+            {
+                "status": result["status"],
+                "message": result["message"],
+                "message_id": result["message_id"],
+            }
+        )

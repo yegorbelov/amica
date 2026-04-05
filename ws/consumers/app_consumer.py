@@ -109,6 +109,12 @@ class AppConsumer(BaseConsumer):
                 await self.handle_delete_user_wallpaper(data)
             elif message_type == "create_group":
                 await self.handle_create_group(data)
+            elif message_type == "message_chunk_init":
+                await self.handle_message_chunk_init(data)
+            elif message_type == "message_chunk_part":
+                await self.handle_message_chunk_part(data)
+            elif message_type == "message_chunk_complete":
+                await self.handle_message_chunk_complete(data)
             else:
                 logger.warning(f"Unknown message type: {message_type}")
         except Exception as e:
@@ -1252,3 +1258,159 @@ class AppConsumer(BaseConsumer):
         except Exception as e:
             logger.error(f"Error deleting wallpaper: {e}")
             return False
+
+    async def handle_message_chunk_init(self, data):
+        from apps.Site.message_chunk_upload_views import (
+            WS_SERVER_CHUNK_SIZE,
+            chunk_init_service,
+        )
+
+        request_id = data.get("request_id")
+        d = data.get("data") or {}
+        try:
+            chat_id = int(d.get("chat_id") or 0)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {
+                    "type": "message_chunk_init_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid chat_id",
+                }
+            )
+            return
+
+        filename = (d.get("filename") or "file").replace("\\", "/").split("/")[-1]
+        mime_type = (d.get("mime_type") or "").strip().lower()
+        media_kind = (d.get("media_kind") or "").strip().lower()
+        try:
+            total_size = int(d.get("total_size") or 0)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {
+                    "type": "message_chunk_init_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid total_size",
+                }
+            )
+            return
+
+        result = await sync_to_async(chunk_init_service)(
+            self.user,
+            chat_id,
+            filename,
+            mime_type,
+            media_kind,
+            total_size,
+            chunk_size=WS_SERVER_CHUNK_SIZE,
+        )
+        payload: dict = {"type": "message_chunk_init_response", "request_id": request_id}
+        if result.get("ok"):
+            payload.update(
+                ok=True,
+                upload_id=result["upload_id"],
+                chunk_count=result["chunk_count"],
+                chunk_size=result["chunk_size"],
+            )
+        else:
+            payload.update(ok=False, error=result.get("error", "error"))
+        await self.send_json(payload)
+
+    async def handle_message_chunk_part(self, data):
+        import base64
+        import binascii
+
+        from apps.Site.message_chunk_upload_views import chunk_part_service
+
+        request_id = data.get("request_id")
+        d = data.get("data") or {}
+        upload_id = d.get("upload_id")
+        try:
+            chunk_index = int(d.get("chunk_index", -1))
+        except (TypeError, ValueError):
+            await self.send_json(
+                {
+                    "type": "message_chunk_part_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid chunk_index",
+                }
+            )
+            return
+
+        chunk_b64 = d.get("chunk_b64")
+        if not isinstance(chunk_b64, str):
+            await self.send_json(
+                {
+                    "type": "message_chunk_part_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "chunk_b64 required",
+                }
+            )
+            return
+
+        try:
+            raw = base64.b64decode(chunk_b64, validate=True)
+        except (ValueError, binascii.Error):
+            await self.send_json(
+                {
+                    "type": "message_chunk_part_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid base64 chunk",
+                }
+            )
+            return
+
+        result = await sync_to_async(chunk_part_service)(
+            self.user, upload_id, chunk_index, raw
+        )
+        payload: dict = {"type": "message_chunk_part_response", "request_id": request_id}
+        if result.get("ok"):
+            payload.update(ok=True, chunk_index=result["chunk_index"])
+        else:
+            payload.update(ok=False, error=result.get("error", "error"))
+        await self.send_json(payload)
+
+    async def handle_message_chunk_complete(self, data):
+        from apps.Site.message_chunk_upload_views import chunk_bundle_complete_service
+
+        request_id = data.get("request_id")
+        d = data.get("data") or {}
+        try:
+            chat_id = int(d.get("chat_id") or 0)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {
+                    "type": "message_chunk_complete_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid chat_id",
+                }
+            )
+            return
+
+        message_text = d.get("message") or ""
+        upload_ids = d.get("upload_ids") or []
+        if not isinstance(upload_ids, list):
+            upload_ids = []
+
+        result = await sync_to_async(chunk_bundle_complete_service)(
+            self.user, chat_id, message_text, upload_ids
+        )
+        payload: dict = {
+            "type": "message_chunk_complete_response",
+            "request_id": request_id,
+        }
+        if result.get("ok"):
+            payload.update(
+                ok=True,
+                status=result["status"],
+                message=result["message"],
+                message_id=result["message_id"],
+            )
+        else:
+            payload.update(ok=False, error=result.get("error", "error"))
+        await self.send_json(payload)
