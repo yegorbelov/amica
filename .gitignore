@@ -45,5 +45,6 @@ build/
 
 celerybeat-schedule*
 
+static/
 staticfiles/
 tmp/

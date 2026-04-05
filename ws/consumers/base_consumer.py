@@ -83,6 +83,10 @@ class BaseConsumer(AsyncWebsocketConsumer):
             await self.send_json({"type": "error", "message": "Invalid JSON format"})
             return
 
+        if data.get("type") == "ping":
+            await self.send_json({"type": "pong"})
+            return
+
         if not self.scope.get("auth_valid"):
             if data.get("type") in ("login", "signup"):
                 try:

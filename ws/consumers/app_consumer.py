@@ -10,7 +10,12 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import ActiveSession
 from apps.accounts.serializers.serializers import UserSerializer
-from apps.accounts.services.sessions import update_user_session_lifetime
+from apps.accounts.session_payload import serialize_active_sessions_for_ws_user
+from apps.accounts.services.sessions import (
+    revoke_active_session_for_user,
+    revoke_other_active_sessions_for_user,
+    update_user_session_lifetime,
+)
 from apps.accounts.views import (
     get_access_token_for_session,
     get_new_access_token_for_user,
@@ -88,6 +93,12 @@ class AppConsumer(BaseConsumer):
                 await self.handle_message_viewed(data)
             elif message_type == "set_session_lifetime":
                 await self.set_session_lifetime(data)
+            elif message_type == "get_active_sessions":
+                await self.handle_get_active_sessions(data)
+            elif message_type == "revoke_session":
+                await self.handle_revoke_session_ws(data)
+            elif message_type == "revoke_other_sessions":
+                await self.handle_revoke_other_sessions_ws()
             elif message_type == "get_chats":
                 await self.handle_get_chats()
             elif message_type == "get_chat":
@@ -513,6 +524,57 @@ class AppConsumer(BaseConsumer):
             self.user, days, current_refresh_token=token
         )
         await self.send_json({"type": "session_lifetime_updated", "days": days})
+
+    async def handle_get_active_sessions(self, data):
+        request_id = data.get("request_id")
+        current_jti = self.scope.get("access_jti")
+        try:
+            sessions = await database_sync_to_async(
+                serialize_active_sessions_for_ws_user
+            )(self.user, current_jti)
+        except Exception as e:
+            logger.exception("get_active_sessions failed: %s", e)
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Failed to load active sessions",
+                    "code": "active_sessions",
+                    "request_id": request_id,
+                }
+            )
+            return
+        await self.send_json(
+            {
+                "type": "active_sessions",
+                "sessions": sessions,
+                "request_id": request_id,
+            }
+        )
+
+    async def handle_revoke_session_ws(self, data):
+        jti = data.get("jti")
+        if not jti:
+            return await self.send_json(
+                {"type": "error", "message": "jti is required"}
+            )
+        current_jti = self.scope.get("access_jti")
+        err = await database_sync_to_async(revoke_active_session_for_user)(
+            self.user, str(jti), current_jti
+        )
+        if err == "not_found":
+            return await self.send_json(
+                {"type": "error", "message": "Session not found"}
+            )
+        if err == "cannot_revoke_current":
+            return await self.send_json(
+                {"type": "error", "message": "Cannot revoke current session"}
+            )
+
+    async def handle_revoke_other_sessions_ws(self):
+        current_jti = self.scope.get("access_jti")
+        await database_sync_to_async(revoke_other_active_sessions_for_user)(
+            self.user, current_jti
+        )
 
     async def handle_get_chats(self):
         try:
@@ -1069,6 +1131,14 @@ class AppConsumer(BaseConsumer):
 
     async def session_lifetime_updated(self, event):
         await self.send_json(event)
+
+    async def session_deleted(self, event):
+        await self.send_json(
+            {
+                "type": "session_deleted",
+                "session": event.get("session", {}),
+            }
+        )
 
     async def file_uploaded(self, event):
         await self.send_json({"type": "file_uploaded", "data": event["data"]})

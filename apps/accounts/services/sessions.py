@@ -10,6 +10,51 @@ from apps.Site.tasks.flush_expired_tokens import flush_expired_token
 from ..models import ActiveSession
 
 
+def _notify_session_deleted(user_id: int, jti: str):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"user_{user_id}",
+        {
+            "type": "session_deleted",
+            "session": {"jti": jti},
+        },
+    )
+
+
+def revoke_active_session_for_user(user, jti: str, current_jti: str | None) -> str | None:
+    """Blacklist refresh, delete row, notify WS. Returns error code or None."""
+    try:
+        session = ActiveSession.objects.get(user=user, jti=jti)
+    except ActiveSession.DoesNotExist:
+        return "not_found"
+    if current_jti and session.jti == current_jti:
+        return "cannot_revoke_current"
+    try:
+        RefreshToken(session.refresh_token).blacklist()
+    except Exception:
+        pass
+    session.delete()
+    _notify_session_deleted(user.id, jti)
+    return None
+
+
+def revoke_other_active_sessions_for_user(user, current_jti: str | None) -> int:
+    """Terminate all sessions except current; returns count revoked."""
+    qs = ActiveSession.objects.filter(user=user)
+    if current_jti:
+        qs = qs.exclude(jti=current_jti)
+    sessions = list(qs)
+    for s in sessions:
+        try:
+            RefreshToken(s.refresh_token).blacklist()
+        except Exception:
+            pass
+        jti = s.jti
+        s.delete()
+        _notify_session_deleted(user.id, jti)
+    return len(sessions)
+
+
 def update_user_session_lifetime(user, days, current_refresh_token=None):
     user.preferred_session_lifetime_days = days
     user.save(update_fields=["preferred_session_lifetime_days"])
