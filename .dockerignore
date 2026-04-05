@@ -53,7 +53,7 @@ venv_new/
 venv/
 
 # GeoIP DB files (mount at runtime or bake in deploy, not from dev tree)
-geoip/
+# geoip/
 
 # Local backups & large fixtures
 backups/

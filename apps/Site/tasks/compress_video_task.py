@@ -105,9 +105,23 @@ def compress_video_sync(model_name: str, video_id: int):
             temp_output,
         ]
 
-        subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-        )
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError as ffmpeg_err:
+            stderr_text = (ffmpeg_err.stderr or b"").decode("utf-8", errors="replace")
+            logger.error(
+                "ffmpeg failed for %s id=%s (exit=%s) input=%s error=%s",
+                model_name,
+                video_id,
+                ffmpeg_err.returncode,
+                video_path,
+                stderr_text.strip()[:4000],
+            )
+            raise RuntimeError(
+                f"ffmpeg failed with exit code {ffmpeg_err.returncode}"
+            ) from ffmpeg_err
 
         # Original is no longer needed; remove from storage before writing compressed
         # (avoids leaving a second copy if storage uses new names on save).
@@ -195,7 +209,7 @@ def compress_video_task(self, model_name: str, video_id: int):
     try:
         return compress_video_sync(model_name, video_id)
     except Exception as e:
-        logger.error(f"Failed to compress video {model_name} id={video_id}: {e}")
+        logger.exception(f"Failed to compress video {model_name} id={video_id}: {e}")
         model_map = {
             "DisplayVideo": DisplayVideo,
             "VideoFile": VideoFile,
@@ -209,4 +223,13 @@ def compress_video_task(self, model_name: str, video_id: int):
                     video_instance.save(update_fields=["status"])
             except Exception:
                 pass
-        raise self.retry(countdown=5)
+        # Avoid surfacing MaxRetriesExceededError as task crash after final attempt.
+        if self.request.retries >= self.max_retries:
+            logger.error(
+                "Compression permanently failed for %s id=%s after %s retries",
+                model_name,
+                video_id,
+                self.request.retries,
+            )
+            return {"status": "failed", "reason": str(e)}
+        raise self.retry(countdown=5, exc=e)
