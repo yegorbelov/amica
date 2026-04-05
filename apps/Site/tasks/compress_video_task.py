@@ -115,7 +115,17 @@ def compress_video_sync(model_name: str, video_id: int):
         video_field.delete(save=False)
 
         with open(temp_output, "rb") as f:
-            video_field.save(save_name, File(f), save=True)
+            # FieldFile.save(save=True) persists only the file field, so metadata
+            # (width/height/has_audio/file_size) may be computed but not written.
+            # Save file name first, then persist model fields explicitly.
+            video_field.save(save_name, File(f), save=False)
+
+        if model_name == "VideoFile":
+            video_instance.populate_video_metadata()
+            video_instance.save(
+                update_fields=["file", "file_size", "width", "height", "has_audio"]
+            )
+            return {"status": "done"}
 
         if not hasattr(video_instance, "status"):
             return {"status": "done"}
