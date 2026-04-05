@@ -44,6 +44,8 @@ from .base_consumer import BaseConsumer
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_BROADCASTS = 50
+WS_CHUNK_ACK_BATCH_SIZE = 4
+WS_CHUNK_ACK_MAX_DELAY_MS = 120
 
 
 class AppConsumer(BaseConsumer):
@@ -51,6 +53,53 @@ class AppConsumer(BaseConsumer):
         super().__init__(*args, **kwargs)
         self.chat_users_cache = {}
         self.pending_chunk_parts = {}
+        self.pending_chunk_ack_request_ids = []
+        self.pending_chunk_ack_chunk_indexes = []
+        self.pending_chunk_ack_flush_task = None
+
+    async def _delayed_flush_chunk_acks(self):
+        try:
+            await asyncio.sleep(WS_CHUNK_ACK_MAX_DELAY_MS / 1000)
+            await self._flush_chunk_acks()
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_chunk_acks(self):
+        request_ids = self.pending_chunk_ack_request_ids
+        chunk_indexes = self.pending_chunk_ack_chunk_indexes
+        if not request_ids:
+            self.pending_chunk_ack_request_ids = []
+            self.pending_chunk_ack_chunk_indexes = []
+            self.pending_chunk_ack_flush_task = None
+            return
+
+        self.pending_chunk_ack_request_ids = []
+        self.pending_chunk_ack_chunk_indexes = []
+        task = self.pending_chunk_ack_flush_task
+        if task and task is not asyncio.current_task():
+            task.cancel()
+        self.pending_chunk_ack_flush_task = None
+
+        await self.send_json(
+            {
+                "type": "message_chunk_part_response",
+                "ok": True,
+                "request_id": request_ids[-1],
+                "request_ids": request_ids,
+                "chunk_indexes": chunk_indexes,
+            }
+        )
+
+    async def _queue_chunk_ack(self, request_id: int, chunk_index: int):
+        self.pending_chunk_ack_request_ids.append(request_id)
+        self.pending_chunk_ack_chunk_indexes.append(chunk_index)
+        if len(self.pending_chunk_ack_request_ids) >= WS_CHUNK_ACK_BATCH_SIZE:
+            await self._flush_chunk_acks()
+            return
+        if not self.pending_chunk_ack_flush_task:
+            self.pending_chunk_ack_flush_task = asyncio.create_task(
+                self._delayed_flush_chunk_acks()
+            )
 
     async def handle_message(self, data):
         message_type = data.get("type")
@@ -1367,6 +1416,24 @@ class AppConsumer(BaseConsumer):
             )
             return
 
+        raw_chunk = d.get("chunk_size")
+        try:
+            requested_chunk = int(raw_chunk) if raw_chunk is not None else None
+        except (TypeError, ValueError):
+            await self.send_json(
+                {
+                    "type": "message_chunk_init_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": "Invalid chunk_size",
+                }
+            )
+            return
+
+        ws_chunk = (
+            requested_chunk if requested_chunk is not None else WS_SERVER_CHUNK_SIZE
+        )
+
         result = await sync_to_async(chunk_init_service)(
             self.user,
             chat_id,
@@ -1374,7 +1441,7 @@ class AppConsumer(BaseConsumer):
             mime_type,
             media_kind,
             total_size,
-            chunk_size=WS_SERVER_CHUNK_SIZE,
+            chunk_size=ws_chunk,
         )
         payload: dict = {"type": "message_chunk_init_response", "request_id": request_id}
         if result.get("ok"):
@@ -1471,27 +1538,66 @@ class AppConsumer(BaseConsumer):
 
         request_id = int.from_bytes(bytes_data[:4], byteorder="big", signed=False)
         meta = self.pending_chunk_parts.pop(request_id, None)
-        if not meta:
-            await self.send_json(
-                {
-                    "type": "message_chunk_part_response",
-                    "request_id": request_id,
-                    "ok": False,
-                    "error": "Missing chunk metadata",
-                }
+        if meta:
+            raw = bytes_data[4:]
+            result = await sync_to_async(chunk_part_service)(
+                self.user, meta.get("upload_id"), int(meta.get("chunk_index", -1)), raw
             )
+        else:
+            # New binary-only protocol:
+            # [request_id:4][chunk_index:4][upload_id_len:2][upload_id:utf-8][chunk_bytes]
+            if len(bytes_data) < 10:
+                await self.send_json(
+                    {
+                        "type": "message_chunk_part_response",
+                        "request_id": request_id,
+                        "ok": False,
+                        "error": "Invalid binary chunk frame",
+                    }
+                )
+                return
+            chunk_index = int.from_bytes(bytes_data[4:8], byteorder="big", signed=False)
+            upload_id_len = int.from_bytes(bytes_data[8:10], byteorder="big", signed=False)
+            upload_id_end = 10 + upload_id_len
+            if upload_id_len < 1 or upload_id_end > len(bytes_data):
+                await self.send_json(
+                    {
+                        "type": "message_chunk_part_response",
+                        "request_id": request_id,
+                        "ok": False,
+                        "error": "Invalid binary chunk frame",
+                    }
+                )
+                return
+            try:
+                upload_id = bytes_data[10:upload_id_end].decode("utf-8")
+            except UnicodeDecodeError:
+                await self.send_json(
+                    {
+                        "type": "message_chunk_part_response",
+                        "request_id": request_id,
+                        "ok": False,
+                        "error": "Invalid upload_id encoding",
+                    }
+                )
+                return
+            raw = bytes_data[upload_id_end:]
+            result = await sync_to_async(chunk_part_service)(
+                self.user, upload_id, chunk_index, raw
+            )
+
+        if result.get("ok"):
+            await self._queue_chunk_ack(request_id, int(result["chunk_index"]))
             return
 
-        raw = bytes_data[4:]
-        result = await sync_to_async(chunk_part_service)(
-            self.user, meta.get("upload_id"), int(meta.get("chunk_index", -1)), raw
+        await self.send_json(
+            {
+                "type": "message_chunk_part_response",
+                "request_id": request_id,
+                "ok": False,
+                "error": result.get("error", "error"),
+            }
         )
-        payload: dict = {"type": "message_chunk_part_response", "request_id": request_id}
-        if result.get("ok"):
-            payload.update(ok=True, chunk_index=result["chunk_index"])
-        else:
-            payload.update(ok=False, error=result.get("error", "error"))
-        await self.send_json(payload)
 
     async def handle_message_chunk_complete(self, data):
         from apps.Site.message_chunk_upload_views import chunk_bundle_complete_service

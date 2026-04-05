@@ -30,6 +30,8 @@ CHUNK_UPLOAD_SUBDIR = "chunk_uploads"
 SERVER_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
 # WebSocket uses binary frames; larger chunks reduce round-trip overhead.
 WS_SERVER_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
+MIN_CLIENT_CHUNK_SIZE = 64 * 1024  # 64 KiB
+MAX_CLIENT_CHUNK_SIZE = SERVER_CHUNK_SIZE
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB, same as MessageViewSet.create
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
@@ -75,7 +77,7 @@ def chunk_init_service(
     Shared by HTTP and WebSocket. Returns ok + fields or ok=False + error + http_status.
     """
     use_chunk = chunk_size if chunk_size is not None else SERVER_CHUNK_SIZE
-    if use_chunk < 1:
+    if use_chunk < MIN_CLIENT_CHUNK_SIZE or use_chunk > MAX_CLIENT_CHUNK_SIZE:
         return {"ok": False, "error": "Invalid chunk_size", "http_status": 400}
 
     if not chat_id or total_size <= 0 or total_size > MAX_FILE_SIZE:
@@ -128,6 +130,11 @@ class MessageChunkInitView(APIView):
         mime_type = (data.get("mime_type") or "").strip().lower()
         media_kind = (data.get("media_kind") or "").strip().lower()
         total_size = int(data.get("total_size") or 0)
+        raw_chunk = data.get("chunk_size")
+        try:
+            requested_chunk = int(raw_chunk) if raw_chunk is not None else None
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Invalid chunk_size"}, status=400)
 
         result = chunk_init_service(
             request.user,
@@ -136,6 +143,7 @@ class MessageChunkInitView(APIView):
             mime_type,
             media_kind,
             total_size,
+            chunk_size=requested_chunk,
         )
         if not result.get("ok"):
             return JsonResponse(

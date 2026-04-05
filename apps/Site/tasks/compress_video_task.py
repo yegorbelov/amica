@@ -215,7 +215,13 @@ def compress_video_sync(model_name: str, video_id: int):
                 logger.warning(f"Could not remove temp file: {e}")
 
 
-@shared_task(bind=True, max_retries=3, retry_backoff=True)
+@shared_task(
+    bind=True,
+    max_retries=3,
+    retry_backoff=True,
+    soft_time_limit=1140,  # 19 min
+    time_limit=1200,       # 20 min
+)
 def compress_video_task(self, model_name: str, video_id: int):
     try:
         return compress_video_sync(model_name, video_id)
