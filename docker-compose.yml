@@ -1,3 +1,6 @@
+# Builds use Dockerfile BuildKit features (pip cache mount). Docker Desktop /
+# Engine 23+ enable BuildKit by default; otherwise: export DOCKER_BUILDKIT=1
+
 services:
   amica:
     build: .
