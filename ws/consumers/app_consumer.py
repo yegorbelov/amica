@@ -25,6 +25,7 @@ from apps.accounts.views import (
 from apps.Site.models import (
     Chat,
     ChatMember,
+    Contact,
     Message,
     MessageReaction,
     MessageRecipient,
@@ -44,6 +45,36 @@ from .base_consumer import BaseConsumer
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_BROADCASTS = 50
+
+
+def _add_contact_via_ws(owner_id, target_user_id):
+    """Sync helper for WebSocket add_contact (runs in thread pool)."""
+    User = get_user_model()
+    try:
+        owner = User.objects.get(pk=owner_id)
+    except User.DoesNotExist:
+        return None, "Not authenticated"
+    if target_user_id == owner_id:
+        return None, "You cannot add yourself to contacts"
+    try:
+        target = User.objects.get(pk=target_user_id)
+    except User.DoesNotExist:
+        return None, "User not found"
+    from django.db import IntegrityError
+
+    try:
+        contact, _created = Contact.objects.get_or_create(owner=owner, user=target)
+    except IntegrityError:
+        return None, "Contact already exists"
+    return (
+        {
+            "type": "contact_added",
+            "user_id": target_user_id,
+            "contact_id": contact.id,
+            "name": contact.name or "",
+        },
+        None,
+    )
 WS_CHUNK_ACK_BATCH_SIZE = 6
 WS_CHUNK_ACK_MAX_DELAY_MS = 90
 
@@ -156,6 +187,8 @@ class AppConsumer(BaseConsumer):
                 await self.handle_get_general_info()
             elif message_type == "get_contacts":
                 await self.handle_get_contacts()
+            elif message_type == "add_contact":
+                await self.handle_add_contact(data)
             elif message_type == "refresh_token":
                 await self.handle_refresh_token()
             elif message_type == "login":
@@ -710,6 +743,38 @@ class AppConsumer(BaseConsumer):
             message = str(e) if settings.DEBUG else "Failed to load contacts"
             await self.send_json({"type": "error", "message": message})
 
+    async def handle_add_contact(self, data):
+        new_user_id = (data.get("data") or {}).get("user_id")
+        if new_user_id is None:
+            await self.send_json(
+                {"type": "error", "message": "user_id is required"}
+            )
+            return
+        try:
+            new_user_id = int(new_user_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "user_id must be a number"}
+            )
+            return
+
+        try:
+            payload, err = await database_sync_to_async(_add_contact_via_ws)(
+                self.user.pk, new_user_id
+            )
+        except Exception as e:
+            logger.exception("add_contact failed: %s", e)
+            from django.conf import settings
+
+            message = str(e) if settings.DEBUG else "Failed to add contact"
+            await self.send_json({"type": "error", "message": message})
+            return
+
+        if err:
+            await self.send_json({"type": "error", "message": err})
+            return
+        await self.send_json(payload)
+
     def _get_refresh_token_from_scope(self):
         for key, value in self.scope.get("headers", []):
             if key == b"cookie":
@@ -720,6 +785,20 @@ class AppConsumer(BaseConsumer):
                         cookies[k.strip()] = v.strip()
                 return cookies.get("refresh_token")
         return None
+
+    def _refresh_access_from_refresh_token(self, token_str):
+        """Issue a new access JWT for the current session (same jti as TokenAuthMiddleware on connect)."""
+        try:
+            refresh = RefreshToken(token_str)
+            jti = str(refresh["jti"])
+            session = ActiveSession.objects.filter(
+                jti=jti, expires_at__gt=timezone.now()
+            ).first()
+            if not session:
+                return None
+            return get_access_token_for_session(jti, session.user)
+        except Exception:
+            return None
 
     async def handle_refresh_token(self):
         token_str = self._get_refresh_token_from_scope()
@@ -1442,6 +1521,8 @@ class AppConsumer(BaseConsumer):
             media_kind,
             total_size,
             chunk_size=ws_chunk,
+            width=d.get("width"),
+            height=d.get("height"),
         )
         payload: dict = {"type": "message_chunk_init_response", "request_id": request_id}
         if result.get("ok"):

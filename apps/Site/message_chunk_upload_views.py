@@ -36,8 +36,22 @@ MAX_CLIENT_CHUNK_SIZE = SERVER_CHUNK_SIZE
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB, same as MessageViewSet.create
 MERGE_COPY_BUFFER_BYTES = 1024 * 1024
 MERGE_MAX_WORKERS = 4
+# Client-reported video frame size (from browser metadata); clamped server-side.
+MAX_DECLARED_MEDIA_DIMENSION = 8192
 
 protected_storage = FileSystemStorage(location=settings.PROTECTED_MEDIA_ROOT)
+
+
+def _parse_optional_pixel_dim(value) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= n <= MAX_DECLARED_MEDIA_DIMENSION:
+        return n
+    return None
 
 
 def _session_dir(upload_id: str) -> str:
@@ -75,6 +89,8 @@ def chunk_init_service(
     total_size: int,
     *,
     chunk_size: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
 ) -> dict:
     """
     Shared by HTTP and WebSocket. Returns ok + fields or ok=False + error + http_status.
@@ -108,6 +124,11 @@ def chunk_init_service(
         "chunk_count": chunk_count,
         "chunk_size": use_chunk,
     }
+    dw = _parse_optional_pixel_dim(width)
+    dh = _parse_optional_pixel_dim(height)
+    if dw is not None and dh is not None:
+        meta["width"] = dw
+        meta["height"] = dh
     with open(_meta_path(upload_id), "w", encoding="utf-8") as f:
         json.dump(meta, f)
 
@@ -147,6 +168,8 @@ class MessageChunkInitView(APIView):
             media_kind,
             total_size,
             chunk_size=requested_chunk,
+            width=data.get("width"),
+            height=data.get("height"),
         )
         if not result.get("ok"):
             return JsonResponse(
@@ -218,8 +241,8 @@ class MessageChunkPartView(APIView):
 
 def _merge_session_to_storage(
     upload_id: str, user_id: int, chat_id: int
-) -> Optional[Tuple[str, str, str, str]]:
-    """Returns (storage_path, original_filename, mime_type, media_kind) or None."""
+) -> Optional[Tuple[str, str, str, str, Optional[int], Optional[int]]]:
+    """Returns (storage_path, original_filename, mime_type, media_kind, width, height) or None."""
     meta_path = _meta_path(upload_id)
     if not os.path.isfile(meta_path):
         return None
@@ -275,7 +298,12 @@ def _merge_session_to_storage(
     except Exception:
         pass
 
-    return storage_name, original_name, mime_type, media_kind
+    dw = _parse_optional_pixel_dim(meta.get("width"))
+    dh = _parse_optional_pixel_dim(meta.get("height"))
+    if dw is None or dh is None:
+        dw, dh = None, None
+
+    return storage_name, original_name, mime_type, media_kind, dw, dh
 
 
 def _attach_storage_file_to_message(
@@ -285,6 +313,9 @@ def _attach_storage_file_to_message(
     original_name: str,
     mime_type: str = "",
     media_kind: str = "",
+    *,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
 ):
     """Attach file model quickly; heavy metadata/thumbnail work runs in background tasks."""
     resolved_mime = (mime_type or "").strip().lower()
@@ -336,6 +367,9 @@ def _attach_storage_file_to_message(
 
         needs_processing = True
         new_file = VideoFile(file=filename)
+        if width is not None and height is not None:
+            new_file.width = width
+            new_file.height = height
         # Fast-path complete: defer metadata extraction to background.
         new_file.save(process_media=False)
     elif is_audio:
@@ -424,7 +458,9 @@ def chunk_bundle_complete_service(
                     "http_status": 400,
                 }
 
-        merged_by_uid: dict[str, Tuple[str, str, str, str]] = {}
+        merged_by_uid: dict[
+            str, Tuple[str, str, str, str, Optional[int], Optional[int]]
+        ] = {}
         failed_uid: Optional[str] = None
         workers = min(MERGE_MAX_WORKERS, max(1, len(normalized_ids)))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -446,7 +482,7 @@ def chunk_bundle_complete_service(
                 merged_by_uid[uid] = merged
 
         if failed_uid:
-            for path, _, _, _ in merged_by_uid.values():
+            for path, _, _, _, _, _ in merged_by_uid.values():
                 try:
                     protected_storage.delete(path)
                 except Exception:
@@ -459,7 +495,7 @@ def chunk_bundle_complete_service(
 
         merged_files = [merged_by_uid[uid] for uid in normalized_ids if uid in merged_by_uid]
         if len(merged_files) != len(normalized_ids):
-            for path, _, _, _ in merged_files:
+            for path, _, _, _, _, _ in merged_files:
                 try:
                     protected_storage.delete(path)
                 except Exception:
@@ -471,9 +507,16 @@ def chunk_bundle_complete_service(
             }
 
         new_message = Message.objects.create(value=message_text, user=user, chat=chat)
-        for storage_path, orig_name, mime_type, media_kind in merged_files:
+        for storage_path, orig_name, mime_type, media_kind, dw, dh in merged_files:
             _attach_storage_file_to_message(
-                new_message, user, storage_path, orig_name, mime_type, media_kind
+                new_message,
+                user,
+                storage_path,
+                orig_name,
+                mime_type,
+                media_kind,
+                width=dw,
+                height=dh,
             )
 
         new_message.save()
