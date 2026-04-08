@@ -10,6 +10,7 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import AccessToken, TokenError
 
 from apps.accounts.models.models import ActiveSession
+from apps.accounts.session_binding import JWT_BINDING_CLAIM, session_binding_matches_session
 
 User = get_user_model()
 
@@ -192,7 +193,16 @@ class BaseConsumer(AsyncWebsocketConsumer):
         try:
             access_token = AccessToken(token)
             user_id = access_token["user_id"]
+            jti = access_token["jti"]
             user = User.objects.filter(id=user_id, is_active=True).first()
+            if not user:
+                return None
+            session = ActiveSession.objects.filter(jti=jti).first()
+            if session and session.binding_hash:
+                if access_token.get(JWT_BINDING_CLAIM) != session.binding_hash:
+                    return None
+                if not session_binding_matches_session(session, scope=self.scope):
+                    return None
             return user
         except (TokenError, KeyError):
             return None

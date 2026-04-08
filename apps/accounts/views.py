@@ -4,9 +4,12 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
+import requests
+import uuid
+
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -14,9 +17,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.settings import api_settings
-from rest_framework_simplejwt.tokens import RefreshToken, TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -26,8 +27,37 @@ from webauthn import (
 
 from apps.Site.tasks.flush_expired_tokens import flush_expired_token
 
-from .models import ActiveSession
+from .device_trust import (
+    CODE_MAX_ATTEMPTS,
+    ensure_trusted_from_session_binding,
+    verify_challenge_code,
+)
+from .login_gate import deferred_login_payload
+from .models import (
+    ActiveSession,
+    DeviceLoginChallenge,
+    DeviceRecoveryCooldown,
+    EmailVerificationOtp,
+    RecoveryEmailOtp,
+)
+from .recovery_service import (
+    EMAIL_VERIFICATION_OTP_MAX_ATTEMPTS,
+    OTP_MAX_ATTEMPTS,
+    create_email_verification_otp,
+    get_or_create_recovery_cooldown,
+    send_email_verification_code_email,
+    send_recovery_alert_email,
+    verify_otp_code,
+    verify_six_digit_against_hash,
+)
 from .serializers.serializers import ActiveSessionSerializer, UserSerializer
+from .session_binding import (
+    CLIENT_BINDING_COOKIE,
+    JWT_BINDING_CLAIM,
+    binding_from_request,
+    binding_from_scope,
+    session_binding_matches_session,
+)
 from .utils.google_login_or_create_user import google_login_or_create_user
 
 User = get_user_model()
@@ -81,6 +111,7 @@ def remember_session(user, refresh, request, old_jti=None):
         refresh_token=str(refresh),
         ip_address=ip,
         user_agent=request.META.get("HTTP_USER_AGENT"),
+        binding_hash=binding_from_request(request),
         expires_at=expires_at,
     )
 
@@ -137,6 +168,7 @@ def remember_session_from_scope(scope, user, refresh, old_jti=None):
         refresh_token=str(refresh),
         ip_address=ip or "ws",
         user_agent=user_agent,
+        binding_hash=binding_from_scope(scope),
         expires_at=expires_at,
     )
     try:
@@ -170,6 +202,23 @@ def set_refresh_cookie(response, refresh: RefreshToken):
     return response
 
 
+def ensure_client_binding_cookie(request, response):
+    if request.COOKIES.get(CLIENT_BINDING_COOKIE):
+        return response
+    cid = str(uuid.uuid4())
+    secure = getattr(settings, "SESSION_COOKIE_SECURE", False)
+    response.set_cookie(
+        CLIENT_BINDING_COOKIE,
+        cid,
+        max_age=63072000,
+        httponly=True,
+        secure=secure,
+        samesite="Lax",
+        path="/",
+    )
+    return response
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def refresh_token(request):
@@ -179,14 +228,25 @@ def refresh_token(request):
 
     try:
         old_refresh = RefreshToken(token_str)
-        user = ActiveSession.objects.get(jti=str(old_refresh["jti"])).user
+        jti = str(old_refresh["jti"])
+        session = ActiveSession.objects.filter(
+            jti=jti, expires_at__gt=timezone.now()
+        ).first()
+        if not session:
+            return Response({"error": "Invalid refresh token"}, status=401)
+        if not session_binding_matches_session(session, request=request):
+            return Response({"error": "Invalid refresh token"}, status=401)
+        user = session.user
 
         new_refresh = create_refresh_token_for_user(user)
 
-        remember_session(user, new_refresh, request, old_jti=str(old_refresh["jti"]))
-
-        response = Response({"access": str(new_refresh.access_token)})
-        return set_refresh_cookie(response, new_refresh)
+        new_session = remember_session(user, new_refresh, request, old_jti=jti)
+        access = get_access_token_for_session(
+            str(new_refresh["jti"]), user, new_session.binding_hash
+        )
+        response = Response({"access": access})
+        response = set_refresh_cookie(response, new_refresh)
+        return ensure_client_binding_cookie(request, response)
 
     except Exception:
         return Response({"error": "Invalid refresh token"}, status=401)
@@ -205,11 +265,276 @@ def get_new_access_token_for_user(user):
     return str(create_refresh_token_for_user(user).access_token)
 
 
-def get_access_token_for_session(session_jti, user):
+def get_access_token_for_session(session_jti, user, binding_hash=None):
     """Return an access token string for the existing session (same jti). Used for WS connect with refresh cookie."""
     refresh = create_refresh_token_for_user(user)
     refresh.access_token["jti"] = session_jti
+    if binding_hash:
+        refresh.access_token[JWT_BINDING_CLAIM] = binding_hash
     return str(refresh.access_token)
+
+
+def _gated_login_response(request, user, binding: str):
+    gate = deferred_login_payload(user, binding)
+    if gate:
+        return ensure_client_binding_cookie(request, Response(gate, status=status.HTTP_200_OK))
+    return None
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def client_binding_bootstrap(request):
+    cid = (request.COOKIES.get(CLIENT_BINDING_COOKIE) or "").strip()
+    if cid:
+        return Response({"ok": True, "client_binding_id": cid})
+    cid = str(uuid.uuid4())
+    secure = getattr(settings, "SESSION_COOKIE_SECURE", False)
+    response = Response({"ok": True, "client_binding_id": cid})
+    response.set_cookie(
+        CLIENT_BINDING_COOKIE,
+        cid,
+        max_age=63072000,
+        httponly=True,
+        secure=secure,
+        samesite="Lax",
+        path="/",
+    )
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def verify_email_otp(request):
+    otp_id = request.data.get("otp_id")
+    code = request.data.get("code")
+    if not otp_id:
+        return Response({"error": "otp_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    otp = (
+        EmailVerificationOtp.objects.filter(id=otp_id, consumed=False)
+        .select_related("user")
+        .first()
+    )
+    if not otp or timezone.now() > otp.expires_at:
+        return Response(
+            {"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    user = otp.user
+    if user.email_verified_at:
+        return Response(
+            {"error": "already verified"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    if otp.attempts >= EMAIL_VERIFICATION_OTP_MAX_ATTEMPTS:
+        return Response(
+            {"error": "too many attempts"}, status=status.HTTP_429_TOO_MANY_REQUESTS
+        )
+    if not verify_six_digit_against_hash(otp.code_hash, str(code or "")):
+        otp.attempts += 1
+        otp.save(update_fields=["attempts"])
+        return Response({"error": "invalid code"}, status=status.HTTP_400_BAD_REQUEST)
+    otp.consumed = True
+    otp.save(update_fields=["consumed"])
+    user.email_verified_at = timezone.now()
+    user.save(update_fields=["email_verified_at"])
+
+    binding = binding_from_request(request)
+    gated = _gated_login_response(request, user, binding)
+    if gated is not None:
+        return gated
+
+    refresh = create_refresh_token_for_user(user)
+    session = remember_session(user, refresh, request)
+    ensure_trusted_from_session_binding(user, session.binding_hash)
+    access = get_access_token_for_session(
+        str(refresh["jti"]), user, session.binding_hash
+    )
+    response = Response(
+        {
+            "access": access,
+            "user": UserSerializer(user, context={"request": request}).data,
+        }
+    )
+    response = set_refresh_cookie(response, refresh)
+    return ensure_client_binding_cookie(request, response)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def device_recovery_no_access(request):
+    identifier = request.data.get("email") or request.data.get("username")
+    password = request.data.get("password")
+    if not identifier or not password:
+        return Response(
+            {"error": "credentials required"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    user = authenticate(username=identifier, password=password)
+    if not user:
+        return Response({"error": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
+    if not user.email_verified_at:
+        return Response({"error": "email_not_verified"}, status=status.HTTP_403_FORBIDDEN)
+    if not user.trusted_binding_hash:
+        return Response(
+            {"error": "no_trusted_device"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    binding = binding_from_request(request)
+    if binding == user.trusted_binding_hash:
+        return Response(
+            {"error": "already_trusted_device"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    rc = get_or_create_recovery_cooldown(user, binding)
+    try:
+        send_recovery_alert_email(user, rc.cooldown_until)
+    except Exception:
+        logger.exception("recovery alert email failed for user %s", user.pk)
+    resp = Response(
+        {
+            "success": True,
+            "cooldown_until": rc.cooldown_until.isoformat(),
+            "message": "After this time you can sign in from this device; we will email you a code.",
+        }
+    )
+    return ensure_client_binding_cookie(request, resp)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def recovery_verify_otp(request):
+    otp_id = request.data.get("otp_id")
+    code = request.data.get("code")
+    if not otp_id:
+        return Response({"error": "otp_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    binding = binding_from_request(request)
+    otp = (
+        RecoveryEmailOtp.objects.filter(id=otp_id, consumed=False)
+        .select_related("user")
+        .first()
+    )
+    if not otp or timezone.now() > otp.expires_at:
+        return Response({"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST)
+    if binding != otp.binding_hash:
+        return Response({"error": "wrong_client"}, status=status.HTTP_403_FORBIDDEN)
+    if otp.attempts >= OTP_MAX_ATTEMPTS:
+        return Response({"error": "too many attempts"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    if not verify_otp_code(otp, str(code or "")):
+        otp.attempts += 1
+        otp.save(update_fields=["attempts"])
+        return Response({"error": "invalid code"}, status=status.HTTP_400_BAD_REQUEST)
+    otp.consumed = True
+    otp.save(update_fields=["consumed"])
+    user = otp.user
+    User.objects.filter(pk=user.pk).update(trusted_binding_hash=binding)
+    user.trusted_binding_hash = binding
+    DeviceRecoveryCooldown.objects.filter(user=user, binding_hash=binding).delete()
+    refresh = create_refresh_token_for_user(user)
+    session = remember_session(user, refresh, request)
+    access = get_access_token_for_session(
+        str(refresh["jti"]), user, session.binding_hash
+    )
+    response = Response(
+        {
+            "access": access,
+            "user": UserSerializer(user, context={"request": request}).data,
+        }
+    )
+    response = set_refresh_cookie(response, refresh)
+    return ensure_client_binding_cookie(request, response)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def device_login_confirm(request):
+    challenge_id = request.data.get("challenge_id")
+    code = request.data.get("code")
+    if not challenge_id:
+        return Response(
+            {"error": "challenge_id required"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    with transaction.atomic():
+        challenge = (
+            DeviceLoginChallenge.objects.select_for_update()
+            .filter(
+                id=challenge_id,
+                user=request.user,
+                status=DeviceLoginChallenge.Status.PENDING,
+            )
+            .first()
+        )
+        if not challenge:
+            return Response(
+                {"error": "Invalid or expired challenge"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if challenge.expires_at <= timezone.now():
+            challenge.status = DeviceLoginChallenge.Status.EXPIRED
+            challenge.save(update_fields=["status"])
+            return Response({"error": "Challenge expired"}, status=status.HTTP_410_GONE)
+        if challenge.attempts >= CODE_MAX_ATTEMPTS:
+            return Response(
+                {"error": "Too many attempts"}, status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+        if not verify_challenge_code(challenge, str(code or "")):
+            challenge.attempts += 1
+            challenge.save(update_fields=["attempts"])
+            return Response({"error": "Invalid code"}, status=status.HTTP_400_BAD_REQUEST)
+        challenge.status = DeviceLoginChallenge.Status.APPROVED
+        challenge.save(update_fields=["status"])
+
+    return Response({"success": True})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def device_login_poll(request, challenge_id):
+    binding = binding_from_request(request)
+    challenge = DeviceLoginChallenge.objects.filter(id=challenge_id).first()
+    if not challenge:
+        return Response({"error": "not_found"}, status=status.HTTP_404_NOT_FOUND)
+
+    if binding != challenge.new_binding_hash:
+        return Response({"error": "wrong_client"}, status=status.HTTP_403_FORBIDDEN)
+
+    if timezone.now() > challenge.expires_at:
+        if challenge.status == DeviceLoginChallenge.Status.PENDING:
+            challenge.status = DeviceLoginChallenge.Status.EXPIRED
+            challenge.save(update_fields=["status"])
+        return Response({"status": "expired"}, status=status.HTTP_410_GONE)
+
+    if challenge.status == DeviceLoginChallenge.Status.PENDING:
+        return Response({"status": "pending"})
+
+    if challenge.status != DeviceLoginChallenge.Status.APPROVED:
+        return Response({"status": "expired"}, status=status.HTTP_410_GONE)
+
+    with transaction.atomic():
+        locked = (
+            DeviceLoginChallenge.objects.select_for_update()
+            .filter(
+                id=challenge_id,
+                status=DeviceLoginChallenge.Status.APPROVED,
+            )
+            .first()
+        )
+        if not locked:
+            return Response({"status": "pending"})
+        user_id = locked.user_id
+        locked.delete()
+
+    user = User.objects.get(pk=user_id)
+    refresh = create_refresh_token_for_user(user)
+    session = remember_session(user, refresh, request)
+    ensure_trusted_from_session_binding(user, session.binding_hash)
+    access = get_access_token_for_session(
+        str(refresh["jti"]), user, session.binding_hash
+    )
+    response = Response(
+        {
+            "status": "ok",
+            "access": access,
+            "user": UserSerializer(user, context={"request": request}).data,
+        }
+    )
+    response = set_refresh_cookie(response, refresh)
+    return ensure_client_binding_cookie(request, response)
 
 
 @api_view(["POST"])
@@ -221,10 +546,27 @@ def api_login(request):
     if not user:
         return Response({"error": "Invalid credentials"}, status=400)
 
-    refresh = create_refresh_token_for_user(user)
-    access = str(refresh.access_token)
+    if not user.email_verified_at:
+        return Response(
+            {
+                "error": "email_not_verified",
+                "email": user.email,
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
-    remember_session(user, refresh, request)
+    binding = binding_from_request(request)
+    gated = _gated_login_response(request, user, binding)
+    if gated is not None:
+        return gated
+
+    refresh = create_refresh_token_for_user(user)
+
+    session = remember_session(user, refresh, request)
+    ensure_trusted_from_session_binding(user, session.binding_hash)
+    access = get_access_token_for_session(
+        str(refresh["jti"]), user, session.binding_hash
+    )
 
     response = Response(
         {
@@ -232,12 +574,8 @@ def api_login(request):
             "user": UserSerializer(user, context={"request": request}).data,
         }
     )
-    return set_refresh_cookie(response, refresh)
-
-
-import requests
-from rest_framework.response import Response
-from rest_framework import status
+    response = set_refresh_cookie(response, refresh)
+    return ensure_client_binding_cookie(request, response)
 
 
 @api_view(["POST"])
@@ -263,14 +601,25 @@ def google_login(request):
 
     user = google_login_or_create_user(request, access_token)
 
-    refresh = RefreshToken.for_user(user)
-    remember_session(user, refresh, request)
-    serializer = UserSerializer(user, context={"request": request})
-    response = Response({"access": str(refresh.access_token), "user": serializer.data})
-    response = set_refresh_cookie(response, refresh)
-    return response
+    if not user.email_verified_at:
+        user.email_verified_at = timezone.now()
+        user.save(update_fields=["email_verified_at"])
 
-    return response
+    binding = binding_from_request(request)
+    gated = _gated_login_response(request, user, binding)
+    if gated is not None:
+        return gated
+
+    refresh = RefreshToken.for_user(user)
+    session = remember_session(user, refresh, request)
+    ensure_trusted_from_session_binding(user, session.binding_hash)
+    access = get_access_token_for_session(
+        str(refresh["jti"]), user, session.binding_hash
+    )
+    serializer = UserSerializer(user, context={"request": request})
+    response = Response({"access": access, "user": serializer.data})
+    response = set_refresh_cookie(response, refresh)
+    return ensure_client_binding_cookie(request, response)
 
 
 @api_view(["POST"])
@@ -308,20 +657,23 @@ def signup(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    refresh = RefreshToken.for_user(user)
-    remember_session(user, refresh, request)
+    ev_otp, plain = create_email_verification_otp(user)
+    try:
+        send_email_verification_code_email(user, plain)
+    except Exception:
+        logger.exception("verification email failed for user %s", user.pk)
+
     response = Response(
         {
+            "needs_email_verification": True,
             "user_id": user.id,
             "username": user.username,
             "email": user.email,
+            "email_verification_otp_id": str(ev_otp.id),
         },
         status=status.HTTP_201_CREATED,
     )
-
-    response = set_refresh_cookie(response, refresh)
-
-    return response
+    return ensure_client_binding_cookie(request, response)
 
 
 def base64url_to_bytes(val: str) -> bytes:
@@ -390,6 +742,12 @@ def passkey_register_finish(request):
 
         user = User.objects.get(email=email)
 
+        if not user.email_verified_at:
+            return Response(
+                {"error": "email_not_verified"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         expected_challenge = base64url_to_bytes(challenge_b64)
 
         credential = {
@@ -412,8 +770,16 @@ def passkey_register_finish(request):
         user.sign_count = webauthn_resp.sign_count
         user.save()
 
+        binding = binding_from_request(request)
+        gated = _gated_login_response(request, user, binding)
+        if gated is not None:
+            del request.session["passkey_challenge"]
+            del request.session["passkey_user_email"]
+            return gated
+
         refresh = RefreshToken.for_user(user)
-        remember_session(user, refresh, request)
+        session = remember_session(user, refresh, request)
+        ensure_trusted_from_session_binding(user, session.binding_hash)
         serializer = UserSerializer(user, context={"request": request})
         response = Response(
             {"success": True, "message": "Passkey registered", **serializer.data}
@@ -423,7 +789,7 @@ def passkey_register_finish(request):
         del request.session["passkey_challenge"]
         del request.session["passkey_user_email"]
 
-        return response
+        return ensure_client_binding_cookie(request, response)
 
     except User.DoesNotExist:
         return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -508,13 +874,38 @@ def passkey_auth_finish(request):
         user.sign_count = webauthn_resp.new_sign_count
         user.save()
 
+        if not user.email_verified_at:
+            del request.session["passkey_challenge"]
+            return Response(
+                {"error": "email_not_verified"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        binding = binding_from_request(request)
+        gated = _gated_login_response(request, user, binding)
+        if gated is not None:
+            del request.session["passkey_challenge"]
+            return gated
+
         refresh = RefreshToken.for_user(user)
-        remember_session(user, refresh, request)
-        response = Response({"success": True, "message": "Passkey login successful!"})
+        session = remember_session(user, refresh, request)
+        ensure_trusted_from_session_binding(user, session.binding_hash)
+        access = get_access_token_for_session(
+            str(refresh["jti"]), user, session.binding_hash
+        )
+        serializer = UserSerializer(user, context={"request": request})
+        response = Response(
+            {
+                "success": True,
+                "message": "Passkey login successful!",
+                "access": access,
+                "user": serializer.data,
+            }
+        )
         response = set_refresh_cookie(response, refresh)
 
         del request.session["passkey_challenge"]
-        return response
+        return ensure_client_binding_cookie(request, response)
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

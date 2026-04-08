@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>{% block title %}{% endblock %}</title>
+    <style type="text/css">
+      {{ email_css|safe }}
+    </style>
+  </head>
+  <body class="body-outer">
+    <span class="preheader">{% block preheader %}{% endblock %}</span>
+    <table
+      role="presentation"
+      width="100%"
+      cellspacing="0"
+      cellpadding="0"
+      class="shell"
+    >
+      <tr>
+        <td align="center" class="shell-pad">
+          <table
+            role="presentation"
+            width="100%"
+            cellspacing="0"
+            cellpadding="0"
+            class="card"
+          >
+            <tr>
+              <td class="card-accent"></td>
+            </tr>
+            <tr>
+              <td class="card-body">
+                <p class="brand">Amica</p>
+                {% block content %}{% endblock %}
+              </td>
+            </tr>
+            <tr>
+              <td class="footer-legal">
+                <p>
+                  You received this because of an action on your Amica
+                  account.<br />Please do not reply to this message.
+                </p>
+              </td>
+            </tr>
+          </table>
+          <p class="copyright">© Amica</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

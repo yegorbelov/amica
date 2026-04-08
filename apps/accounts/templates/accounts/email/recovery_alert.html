@@ -1,0 +1,16 @@
+{% extends "accounts/email/base.html" %}
+{% block title %}Amica security notice{% endblock %}
+{% block preheader %}New device sign-in attempt on your account.{% endblock %}
+{% block content %}
+<h1 class="h1">New device sign-in</h1>
+<p class="lead">Someone signed in with your password from a <span class="emph">new browser profile</span> that isn’t your trusted device yet.</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="alert-box">
+<tr>
+<td class="alert-box-inner">
+<p><strong>Not you?</strong> Change your password immediately in Amica settings.</p>
+</td>
+</tr>
+</table>
+<p class="cooldown-label">After this time you can finish signing in on that device — we’ll send a one-time code to this email:</p>
+<p class="cooldown-time">{{ cooldown_display }}</p>
+{% endblock %}

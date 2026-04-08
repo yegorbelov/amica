@@ -1,9 +1,14 @@
 from datetime import timedelta
 from django.utils import timezone
+import logging
+
+from apps.accounts.models import ActiveSession
+from apps.accounts.session_binding import (
+    JWT_BINDING_CLAIM,
+    session_binding_matches_session,
+)
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
-from apps.accounts.models import ActiveSession
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,15 @@ class BearerJWTAuthentication(JWTAuthentication):
             return None
 
         user, token = result
+
+        jti = token.get("jti")
+        if jti:
+            session = ActiveSession.objects.filter(jti=jti).first()
+            if session and session.binding_hash:
+                if token.get(JWT_BINDING_CLAIM) != session.binding_hash:
+                    return None
+                if not session_binding_matches_session(session, request=request):
+                    return None
 
         profile = getattr(user, "profile", None)
         if profile:

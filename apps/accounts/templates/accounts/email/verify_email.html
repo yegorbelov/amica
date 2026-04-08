@@ -1,0 +1,9 @@
+{% extends "accounts/email/base.html" %}
+{% block title %}Confirm your Amica email{% endblock %}
+{% block preheader %}Your code is {{ code }}. Expires in 30 minutes.{% endblock %}
+{% block content %}
+<h1 class="h1">Confirm your email</h1>
+<p class="lead">Almost there — enter this code in the app to finish signing up.</p>
+{% include "accounts/email/includes/otp_block.html" %}
+<p class="muted">Expires in <strong>30 minutes</strong>. If you didn’t create an account, you can ignore this email.</p>
+{% endblock %}

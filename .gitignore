@@ -38,6 +38,9 @@ server.key
 
 backups/
 
+# Secrets (keep real credentials only in local .env)
+.env
+
 # Python packaging
 *.egg-info/
 dist/

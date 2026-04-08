@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, TokenError
 
 from apps.accounts.models.models import ActiveSession
+from apps.accounts.session_binding import JWT_BINDING_CLAIM, session_binding_matches_session
 from apps.accounts.views import get_access_token_for_session
 
 User = get_user_model()
@@ -23,7 +24,7 @@ class TokenAuthMiddleware(BaseMiddleware):
         token = self._get_token_from_scope(scope)
 
         if token:
-            user_and_jti = await self._get_user_and_jti(token)
+            user_and_jti = await self._get_user_and_jti(token, scope)
             if user_and_jti:
                 user, jti = user_and_jti
                 scope["user"] = user
@@ -33,7 +34,7 @@ class TokenAuthMiddleware(BaseMiddleware):
             refresh_str = self._get_refresh_token_from_scope(scope)
             if refresh_str:
                 user_jti_and_access = await self._get_user_and_issue_access(
-                    refresh_str
+                    refresh_str, scope
                 )
                 if user_jti_and_access:
                     user, jti, access = user_jti_and_access
@@ -54,7 +55,7 @@ class TokenAuthMiddleware(BaseMiddleware):
         return None
 
     @database_sync_to_async
-    def _get_user_and_issue_access(self, refresh_str):
+    def _get_user_and_issue_access(self, refresh_str, scope):
         try:
             refresh = RefreshToken(refresh_str)
             jti = str(refresh["jti"])
@@ -63,8 +64,10 @@ class TokenAuthMiddleware(BaseMiddleware):
             ).first()
             if not session:
                 return None
+            if not session_binding_matches_session(session, scope=scope):
+                return None
             user = session.user
-            access = get_access_token_for_session(jti, user)
+            access = get_access_token_for_session(jti, user, session.binding_hash)
             return user, jti, access
         except (TokenError, KeyError):
             return None
@@ -87,7 +90,7 @@ class TokenAuthMiddleware(BaseMiddleware):
         return None
 
     @database_sync_to_async
-    def _get_user_and_jti(self, token_str):
+    def _get_user_and_jti(self, token_str, scope):
         try:
             token = AccessToken(token_str)
             user_id = token["user_id"]
@@ -96,6 +99,13 @@ class TokenAuthMiddleware(BaseMiddleware):
             user = User.objects.filter(id=user_id).first()
             if not user:
                 return None
+
+            session = ActiveSession.objects.filter(jti=jti).first()
+            if session and session.binding_hash:
+                if token.get(JWT_BINDING_CLAIM) != session.binding_hash:
+                    return None
+                if not session_binding_matches_session(session, scope=scope):
+                    return None
 
             return user, jti
         except (TokenError, KeyError):

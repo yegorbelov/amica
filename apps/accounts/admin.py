@@ -5,7 +5,15 @@ from django.contrib.contenttypes.admin import GenericTabularInline
 from apps.media_files.models.models import DisplayPhoto, DisplayVideo
 
 from .forms import CustomUserChangeForm, CustomUserCreationForm
-from .models.models import ActiveSession, CustomUser, Profile
+from .models.models import (
+    ActiveSession,
+    CustomUser,
+    Profile,
+    DeviceRecoveryCooldown,
+    EmailVerificationOtp,
+    RecoveryEmailOtp,
+    DeviceLoginChallenge,
+)
 
 
 class ProfileAvatarInline(GenericTabularInline):
@@ -52,7 +60,7 @@ class CustomUserAdmin(UserAdmin):
     model = CustomUser
     inlines = (ProfileInline,)
 
-    list_display = ("username", "email", "is_staff", "is_active")
+    list_display = ("username", "email", "is_staff", "is_active", "trusted_binding_hash", "email_verified_at")
     search_fields = ("email", "username")
     ordering = ("email",)
 
@@ -66,6 +74,7 @@ class CustomUserAdmin(UserAdmin):
     fieldsets = (
         (None, {"fields": ("username", "email", "password")}),
         ("Passkey", {"fields": readonly_fields}),
+        ("Device Trust", {"fields": ("trusted_binding_hash", "email_verified_at")}),
         ("Session", {"fields": ("preferred_session_lifetime_days",)}),
         ("Permissions", {"fields": ("is_staff", "is_active")}),
     )
@@ -83,6 +92,8 @@ class CustomUserAdmin(UserAdmin):
                     "is_staff",
                     "is_active",
                     "preferred_session_lifetime_days",
+                    "trusted_binding_hash",
+                    "email_verified_at",
                 ),
             },
         ),
@@ -125,3 +136,26 @@ class ActiveSessionAdmin(admin.ModelAdmin):
         return obj.last_active.strftime("%Y-%m-%d %H:%M:%S")
 
     last_active_display.short_description = "Last Active"
+
+
+@admin.register(DeviceRecoveryCooldown)
+class DeviceRecoveryCooldownAdmin(admin.ModelAdmin):
+    list_display = ("user", "binding_hash", "cooldown_until")
+    search_fields = ("user__email", "user__username", "binding_hash")
+
+
+@admin.register(EmailVerificationOtp)
+class EmailVerificationOtpAdmin(admin.ModelAdmin):
+    list_display = ("user", "code_hash", "attempts", "expires_at", "consumed")
+    search_fields = ("user__email", "user__username", "code_hash")
+
+
+@admin.register(RecoveryEmailOtp)
+class RecoveryEmailOtpAdmin(admin.ModelAdmin):
+    list_display = ("user", "binding_hash", "code_hash", "attempts", "expires_at", "consumed")
+    search_fields = ("user__email", "user__username", "binding_hash", "code_hash")
+
+@admin.register(DeviceLoginChallenge)
+class DeviceLoginChallengeAdmin(admin.ModelAdmin):
+    list_display = ("user", "new_binding_hash", "code_hash", "attempts", "status", "expires_at")
+    search_fields = ("user__email", "user__username", "new_binding_hash", "code_hash")

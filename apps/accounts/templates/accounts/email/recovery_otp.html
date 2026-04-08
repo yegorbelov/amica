@@ -1,0 +1,9 @@
+{% extends "accounts/email/base.html" %}
+{% block title %}Amica recovery code{% endblock %}
+{% block preheader %}Recovery code: {{ code }}{% endblock %}
+{% block content %}
+<h1 class="h1">Your recovery code</h1>
+<p class="lead">Use this code to sign in from your new device after the waiting period.</p>
+{% include "accounts/email/includes/otp_block.html" %}
+<p class="muted">Expires in <strong>15 minutes</strong>. If you didn’t request this, change your password right away.</p>
+{% endblock %}

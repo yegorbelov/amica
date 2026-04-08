@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AbstractUser
 from django.db import models
@@ -35,6 +37,11 @@ class CustomUser(AbstractUser):
     preferred_session_lifetime_days = models.PositiveIntegerField(
         choices=SessionLifetime.choices, default=SessionLifetime.ONE_WEEK
     )
+
+    # Single trusted device fingerprint (session_binding hash); new devices need confirmation.
+    trusted_binding_hash = models.CharField(max_length=64, null=True, blank=True)
+
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -115,6 +122,9 @@ class ActiveSession(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
 
+    # HMAC-SHA256 hex; binds tokens to X-Client-Binding + browser hints (see session_binding).
+    binding_hash = models.CharField(max_length=64, null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     last_active = models.DateTimeField(auto_now=True)
@@ -130,3 +140,106 @@ class ActiveSession(models.Model):
 
     def __str__(self):
         return f"Session(user={self.user_id}, active={self.last_active})"
+
+
+class DeviceLoginChallenge(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="device_login_challenges",
+    )
+    new_binding_hash = models.CharField(max_length=64)
+    code_hash = models.CharField(max_length=64)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"DeviceLoginChallenge({self.user_id}, {self.status})"
+
+
+class DeviceRecoveryCooldown(models.Model):
+    """After user reports no access to trusted device; blocks recovery OTP until cooldown_until."""
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="device_recovery_cooldowns",
+    )
+    binding_hash = models.CharField(max_length=64)
+    cooldown_until = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("user", "binding_hash")]
+        indexes = [
+            models.Index(fields=["user", "binding_hash"]),
+        ]
+
+    def __str__(self):
+        return f"DeviceRecoveryCooldown({self.user_id}, until={self.cooldown_until})"
+
+
+class EmailVerificationOtp(models.Model):
+    """One-time code emailed after signup until email_verified_at is set."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="email_verification_otps",
+    )
+    code_hash = models.CharField(max_length=64)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "consumed"]),
+        ]
+
+    def __str__(self):
+        return f"EmailVerificationOtp({self.user_id}, consumed={self.consumed})"
+
+
+class RecoveryEmailOtp(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="recovery_email_otps",
+    )
+    binding_hash = models.CharField(max_length=64)
+    code_hash = models.CharField(max_length=64)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "consumed"]),
+        ]
+
+    def __str__(self):
+        return f"RecoveryEmailOtp({self.user_id}, consumed={self.consumed})"

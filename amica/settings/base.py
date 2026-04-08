@@ -21,6 +21,30 @@ WEBAUTHN_PORT = env("WEBAUTHN_PORT")
 SITE_SCHEME = env("SITE_SCHEME")
 SITE_DOMAIN = env("SITE_DOMAIN")
 
+FRONTEND_URL = env.str("FRONTEND_URL", default="http://localhost:5173")
+
+# Email: default console (dev). Set EMAIL_HOST + credentials in .env for real SMTP.
+EMAIL_BACKEND = env.str(
+    "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = env.str("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
+EMAIL_HOST = env.str("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env.str("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env.str("EMAIL_HOST_PASSWORD", default="")
+# Gmail: 587 + TLS (defaults). For port 465 use EMAIL_USE_SSL=True and EMAIL_USE_TLS=False.
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=30)
+
+if (
+    EMAIL_HOST
+    and EMAIL_HOST_USER
+    and EMAIL_HOST_PASSWORD
+    and EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend"
+):
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
@@ -234,6 +258,24 @@ CSRF_COOKIE_HTTPONLY = False
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_PREFLIGHT_MAX_AGE = 86400
+
+try:
+    from corsheaders.defaults import default_headers
+
+    CORS_ALLOW_HEADERS = list(default_headers) + ["x-client-binding"]
+except ImportError:
+    CORS_ALLOW_HEADERS = [
+        "accept",
+        "accept-encoding",
+        "authorization",
+        "content-type",
+        "dnt",
+        "origin",
+        "user-agent",
+        "x-csrftoken",
+        "x-requested-with",
+        "x-client-binding",
+    ]
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS")

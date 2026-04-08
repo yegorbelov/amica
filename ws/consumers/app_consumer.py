@@ -16,10 +16,16 @@ from apps.accounts.services.sessions import (
     revoke_other_active_sessions_for_user,
     update_user_session_lifetime,
 )
+from apps.accounts.device_trust import ensure_trusted_from_session_binding
+from apps.accounts.login_gate import deferred_login_payload
+from apps.accounts.recovery_service import (
+    create_email_verification_otp,
+    send_email_verification_code_email,
+)
+from apps.accounts.session_binding import binding_from_scope, session_binding_matches_session
 from apps.accounts.views import (
-    get_access_token_for_session,
-    get_new_access_token_for_user,
     create_refresh_token_for_user,
+    get_access_token_for_session,
     remember_session_from_scope,
 )
 from apps.Site.models import (
@@ -796,7 +802,11 @@ class AppConsumer(BaseConsumer):
             ).first()
             if not session:
                 return None
-            return get_access_token_for_session(jti, session.user)
+            if not session_binding_matches_session(session, scope=self.scope):
+                return None
+            return get_access_token_for_session(
+                jti, session.user, session.binding_hash
+            )
         except Exception:
             return None
 
@@ -831,10 +841,20 @@ class AppConsumer(BaseConsumer):
         user = authenticate(username=username_or_email, password=password)
         if not user:
             return None
+        if not user.email_verified_at:
+            return {
+                "error": "email_not_verified",
+                "email": user.email,
+            }
+        binding = binding_from_scope(self.scope)
+        gate = deferred_login_payload(user, binding)
+        if gate:
+            return gate
         refresh = create_refresh_token_for_user(user)
-        remember_session_from_scope(self.scope, user, refresh)
+        ws_session = remember_session_from_scope(self.scope, user, refresh)
+        ensure_trusted_from_session_binding(user, ws_session.binding_hash)
         jti = str(refresh["jti"])
-        access = get_access_token_for_session(jti, user)
+        access = get_access_token_for_session(jti, user, ws_session.binding_hash)
         user_data = UserSerializer(user, context={"user": user}).data
         return {"access": access, "refresh": str(refresh), "user": user_data, "jti": jti, "user_obj": user}
 
@@ -849,12 +869,18 @@ class AppConsumer(BaseConsumer):
             )
         except IntegrityError:
             return None
-        refresh = create_refresh_token_for_user(user)
-        remember_session_from_scope(self.scope, user, refresh)
-        jti = str(refresh["jti"])
-        access = get_access_token_for_session(jti, user)
-        user_data = UserSerializer(user, context={"user": user}).data
-        return {"access": access, "refresh": str(refresh), "user": user_data, "jti": jti, "user_obj": user}
+        ev_otp, plain = create_email_verification_otp(user)
+        try:
+            send_email_verification_code_email(user, plain)
+        except Exception:
+            logger.exception("verification email failed for WS signup user %s", user.pk)
+        return {
+            "needs_email_verification": True,
+            "user_id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "email_verification_otp_id": str(ev_otp.id),
+        }
 
     async def handle_login(self, data):
         try:
@@ -869,6 +895,44 @@ class AppConsumer(BaseConsumer):
             if not result:
                 await self.send_json(
                     {"type": "login_response", "error": "Invalid credentials"}
+                )
+                return
+            if result.get("error") == "email_not_verified":
+                await self.send_json(
+                    {
+                        "type": "login_response",
+                        "error": "email_not_verified",
+                        "email": result.get("email"),
+                    }
+                )
+                return
+            if result.get("recovery_cooldown"):
+                await self.send_json(
+                    {
+                        "type": "login_response",
+                        "recovery_cooldown": True,
+                        "try_after": result.get("try_after"),
+                        "message": result.get("message"),
+                    }
+                )
+                return
+            if result.get("needs_recovery_email_otp"):
+                await self.send_json(
+                    {
+                        "type": "login_response",
+                        "needs_recovery_email_otp": True,
+                        "otp_id": result.get("otp_id"),
+                    }
+                )
+                return
+            if result.get("needs_device_confirmation"):
+                await self.send_json(
+                    {
+                        "type": "login_response",
+                        "needs_device_confirmation": True,
+                        "challenge_id": result["challenge_id"],
+                        "code": result["code"],
+                    }
                 )
                 return
             user = result["user_obj"]
@@ -911,6 +975,20 @@ class AppConsumer(BaseConsumer):
         if not result:
             await self.send_json(
                 {"type": "signup_response", "error": "User already exists"}
+            )
+            return
+        if result.get("needs_email_verification"):
+            await self.send_json(
+                {
+                    "type": "signup_response",
+                    "needs_email_verification": True,
+                    "user_id": result["user_id"],
+                    "username": result["username"],
+                    "email": result["email"],
+                    "email_verification_otp_id": result.get(
+                        "email_verification_otp_id"
+                    ),
+                }
             )
             return
         user = result["user_obj"]
@@ -1265,6 +1343,14 @@ class AppConsumer(BaseConsumer):
             {
                 "type": "session_deleted",
                 "session": event.get("session", {}),
+            }
+        )
+
+    async def device_login_pending(self, event):
+        await self.send_json(
+            {
+                "type": "device_login_pending",
+                "challenge_id": event.get("challenge_id"),
             }
         )
 
