@@ -55,6 +55,7 @@ class UserSerializer(serializers.ModelSerializer):
             "preferred_session_lifetime_days",
             "dm_chat_id",
             "has_trusted_device",
+            "totp_enabled",
         )
         read_only_fields = fields
 

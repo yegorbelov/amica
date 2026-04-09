@@ -8,7 +8,7 @@ from .device_trust import (
     notify_trusted_devices,
 )
 from .recovery_service import send_device_login_attempt_email
-from .session_payload import device_login_notify_extras
+from .session_payload import device_login_notify_extras, trusted_device_minimal_label
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,9 @@ def deferred_login_payload(
     If the user should not receive tokens immediately, return a dict for JSON/WS.
     None = proceed with full session issuance.
 
-    OTP is delivered to trusted sessions via WebSocket; the new device only gets
-    challenge_id and must submit the code via device_login_submit_code.
+    OTP is delivered to trusted sessions via WebSocket; the new device gets
+    ``challenge_id``, optional ``trusted_device`` (minimal label for the trusted
+    session), and must submit the code via device_login_submit_code.
     """
     if not user.trusted_binding_hash or binding_matches_trusted(user, binding_hash):
         return None
@@ -42,7 +43,9 @@ def deferred_login_payload(
         request_ip=request_ip,
         request_user_agent=request_user_agent,
     )
-    extras = device_login_notify_extras(request_ip, request_user_agent)
+    extras = device_login_notify_extras(
+        request_ip, request_user_agent, include_versions=True
+    )
     notify_trusted_devices(
         user.id,
         challenge.id,
@@ -68,5 +71,5 @@ def deferred_login_payload(
     return {
         "needs_device_confirmation": True,
         "challenge_id": str(challenge.id),
-        "request_device": extras["request_device"],
+        "trusted_device": trusted_device_minimal_label(user),
     }

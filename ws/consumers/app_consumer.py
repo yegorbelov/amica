@@ -17,6 +17,7 @@ from apps.accounts.services.sessions import (
     update_user_session_lifetime,
 )
 from apps.accounts.backup_codes import verify_and_consume_backup_code
+from apps.accounts.totp_service import user_totp_gate_ok
 from apps.accounts.device_trust import (
     binding_matches_trusted,
     ensure_trusted_from_session_binding,
@@ -844,7 +845,7 @@ class AppConsumer(BaseConsumer):
                 {"type": "error", "message": "Invalid refresh token"}
             )
 
-    def _do_login(self, username_or_email, password, backup_code=""):
+    def _do_login(self, username_or_email, password, backup_code="", totp_code=""):
         from django.contrib.auth import authenticate
 
         user = authenticate(username=username_or_email, password=password)
@@ -855,6 +856,12 @@ class AppConsumer(BaseConsumer):
                 "error": "email_not_verified",
                 "email": user.email,
             }
+        if user.totp_enabled:
+            tc = (totp_code or "").strip()
+            if not tc:
+                return {"error": "totp_required"}
+            if not user_totp_gate_ok(user, tc):
+                return {"error": "invalid_totp"}
         binding = binding_from_scope(self.scope)
         challenge_binding = stable_device_login_challenge_binding_from_scope(
             self.scope
@@ -919,8 +926,9 @@ class AppConsumer(BaseConsumer):
                 )
                 return
             backup_code = (data.get("backup_code") or "").strip()
+            totp_code = (data.get("totp_code") or "").strip()
             result = await database_sync_to_async(self._do_login)(
-                identifier, password, backup_code
+                identifier, password, backup_code, totp_code
             )
             if not result:
                 await self.send_json(
@@ -941,13 +949,23 @@ class AppConsumer(BaseConsumer):
                     {"type": "login_response", "error": "invalid_backup_code"}
                 )
                 return
+            if result.get("error") == "totp_required":
+                await self.send_json(
+                    {"type": "login_response", "error": "totp_required"}
+                )
+                return
+            if result.get("error") == "invalid_totp":
+                await self.send_json(
+                    {"type": "login_response", "error": "invalid_totp"}
+                )
+                return
             if result.get("needs_device_confirmation"):
                 await self.send_json(
                     {
                         "type": "login_response",
                         "needs_device_confirmation": True,
                         "challenge_id": result["challenge_id"],
-                        "request_device": result.get("request_device") or "",
+                        "trusted_device": result.get("trusted_device") or "",
                     }
                 )
                 return

@@ -43,6 +43,10 @@ class CustomUser(AbstractUser):
 
     email_verified_at = models.DateTimeField(null=True, blank=True)
 
+    # TOTP (authenticator app): secret encrypted at rest; enabled only after confirm.
+    totp_secret_cipher = models.TextField(blank=True, default="")
+    totp_enabled = models.BooleanField(default=False)
+
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 

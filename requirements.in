@@ -39,6 +39,7 @@ django-cors-headers==4.9.0
 django-sslserver==0.22
 django-silk==5.4.3
 webauthn==2.7.0
+pyotp>=2.9.0
 # django-webauthn==0.0.2
 # watchfiles==1.1.1
 black==26.1.0

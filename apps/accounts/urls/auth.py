@@ -19,6 +19,9 @@ urlpatterns = [
         views.backup_codes_regenerate,
         name="backup_codes_regenerate",
     ),
+    path("totp/setup/start/", views.totp_setup_start, name="totp_setup_start"),
+    path("totp/setup/confirm/", views.totp_setup_confirm, name="totp_setup_confirm"),
+    path("totp/disable/", views.totp_disable, name="totp_disable"),
     path("login/", views.api_login, name="api_login"),
     path(
         "device-login/submit-code/",

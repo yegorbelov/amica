@@ -53,6 +53,7 @@ from .recovery_service import (
     verify_six_digit_against_hash,
 )
 from .serializers.serializers import ActiveSessionSerializer, UserSerializer
+from .totp_service import user_totp_gate_ok
 from .session_binding import (
     JWT_BINDING_CLAIM,
     attach_client_binding_cookie_if_needed,
@@ -306,6 +307,28 @@ def _trusted_device_binding_ok(request, user) -> bool:
     return constant_time_compare(binding, user.trusted_binding_hash)
 
 
+def _totp_http_gate(request, user):
+    """Require totp_code in JSON when user has TOTP enabled."""
+    if not user.totp_enabled:
+        return None
+    code = (request.data.get("totp_code") or "").strip()
+    if not code:
+        err = Response(
+            {"error": "totp_required"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+        attach_client_binding_cookie_if_needed(request, err)
+        return ensure_client_binding_cookie(request, err)
+    if not user_totp_gate_ok(user, code):
+        err = Response(
+            {"error": "invalid_totp"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+        attach_client_binding_cookie_if_needed(request, err)
+        return ensure_client_binding_cookie(request, err)
+    return None
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def client_binding_bootstrap(request):
@@ -348,6 +371,10 @@ def verify_email_otp(request):
     otp.save(update_fields=["consumed"])
     user.email_verified_at = timezone.now()
     user.save(update_fields=["email_verified_at"])
+
+    gate_totp = _totp_http_gate(request, user)
+    if gate_totp is not None:
+        return gate_totp
 
     gated = _gated_login_response(request, user)
     if gated is not None:
@@ -560,6 +587,10 @@ def api_login(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    gate_totp = _totp_http_gate(request, user)
+    if gate_totp is not None:
+        return gate_totp
+
     response = Response({"access": None, "user": None})
     dev = attach_client_binding_cookie_if_needed(request, response)
     binding = compute_binding_hash(
@@ -633,6 +664,10 @@ def google_login(request):
         user.email_verified_at = timezone.now()
         user.save(update_fields=["email_verified_at"])
 
+    gate_totp = _totp_http_gate(request, user)
+    if gate_totp is not None:
+        return gate_totp
+
     gated = _gated_login_response(request, user)
     if gated is not None:
         return gated
@@ -677,6 +712,90 @@ def backup_codes_regenerate(request):
     codes = regenerate_backup_codes(request.user)
     response = Response({"backup_codes": codes})
     return ensure_client_binding_cookie(request, response)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def totp_setup_start(request):
+    if not _trusted_device_binding_ok(request, request.user):
+        return Response(
+            {"error": "trusted_device_required"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    from .totp_service import build_otpauth_uri, encrypt_totp_secret, generate_totp_secret
+
+    secret = generate_totp_secret()
+    request.user.totp_secret_cipher = encrypt_totp_secret(secret)
+    request.user.totp_enabled = False
+    request.user.save(update_fields=["totp_secret_cipher", "totp_enabled"])
+    uri = build_otpauth_uri(secret, request.user.email or "")
+    return Response({"otpauth_uri": uri, "secret": secret})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def totp_setup_confirm(request):
+    if not _trusted_device_binding_ok(request, request.user):
+        return Response(
+            {"error": "trusted_device_required"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    from .totp_service import verify_totp_code_against_cipher
+
+    code = (request.data.get("code") or "").strip()
+    cipher = (request.user.totp_secret_cipher or "").strip()
+    if not cipher:
+        return Response(
+            {"error": "totp_setup_not_started"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if request.user.totp_enabled:
+        return Response(
+            {"error": "totp_already_enabled"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not verify_totp_code_against_cipher(cipher, code):
+        return Response(
+            {"error": "invalid_totp"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    request.user.totp_enabled = True
+    request.user.save(update_fields=["totp_enabled"])
+    return Response({"success": True, "totp_enabled": True})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def totp_disable(request):
+    if not _trusted_device_binding_ok(request, request.user):
+        return Response(
+            {"error": "trusted_device_required"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    from .totp_service import verify_totp_code_against_cipher
+
+    password = request.data.get("password") or ""
+    code = (request.data.get("code") or "").strip()
+    if not authenticate(username=request.user.email, password=password):
+        return Response(
+            {"error": "invalid_password"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    cipher = (request.user.totp_secret_cipher or "").strip()
+    if not request.user.totp_enabled or not cipher:
+        return Response(
+            {"error": "totp_not_enabled"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not verify_totp_code_against_cipher(cipher, code):
+        return Response(
+            {"error": "invalid_totp"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    request.user.totp_secret_cipher = ""
+    request.user.totp_enabled = False
+    request.user.save(update_fields=["totp_secret_cipher", "totp_enabled"])
+    return Response({"success": True})
 
 
 @api_view(["POST"])
@@ -889,7 +1008,9 @@ def passkey_auth_start(request):
 @permission_classes([AllowAny])
 def passkey_auth_finish(request):
     try:
-        body = json.loads(request.body)
+        body = request.data if isinstance(request.data, dict) else {}
+        if not body and request.body:
+            body = json.loads(request.body)
         challenge_b64 = request.session.get("passkey_challenge")
 
         if not challenge_b64:
@@ -937,6 +1058,10 @@ def passkey_auth_finish(request):
                 {"error": "email_not_verified"},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        gate_totp = _totp_http_gate(request, user)
+        if gate_totp is not None:
+            return gate_totp
 
         gated = _gated_login_response(request, user)
         if gated is not None:
