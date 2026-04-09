@@ -1,8 +1,8 @@
 """
 Bind sessions to a client id + browser fingerprint.
 
-Client id priority: HttpOnly cookie `amica_client_binding_id` (server-issued), then
-X-Client-Binding header, then WebSocket query `client_binding`.
+Client id: HttpOnly cookie `amica_client_binding_id` only (server-issued).
+Not read from headers or WebSocket query — those are forgeable / log-leaky.
 
 Fingerprint (new sessions): User-Agent + Sec-CH-UA-Platform + Sec-CH-UA-Mobile +
 Sec-CH-UA-Full-Version-List (stable Client Hints). Verification accepts older variants
@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from urllib.parse import parse_qs, unquote
+import uuid
 
 from django.conf import settings
 
-BINDING_HEADER_META = "HTTP_X_CLIENT_BINDING"
 JWT_BINDING_CLAIM = "session_bdg"
 CLIENT_BINDING_COOKIE = "amica_client_binding_id"
 
@@ -42,22 +41,38 @@ def parse_cookie_header(raw: str) -> dict[str, str]:
 
 
 def client_device_id_from_request(request) -> str:
+    return (request.COOKIES.get(CLIENT_BINDING_COOKIE) or "").strip()
+
+
+def attach_client_binding_cookie_if_needed(request, response) -> str:
+    """
+    Return the binding id used for this request. If the request has no cookie,
+    mint an id and Set-Cookie on the given response (same request cycle).
+    """
     cid = (request.COOKIES.get(CLIENT_BINDING_COOKIE) or "").strip()
     if cid:
         return cid
-    return (request.META.get(BINDING_HEADER_META) or "").strip()
+    existing = response.cookies.get(CLIENT_BINDING_COOKIE)
+    if existing is not None and existing.value:
+        return str(existing.value)
+    cid = str(uuid.uuid4())
+    secure = getattr(settings, "SESSION_COOKIE_SECURE", False)
+    response.set_cookie(
+        CLIENT_BINDING_COOKIE,
+        cid,
+        max_age=63072000,
+        httponly=True,
+        secure=secure,
+        samesite="Lax",
+        path="/",
+    )
+    return cid
 
 
 def client_device_id_from_scope(scope: dict) -> str:
     headers = _headers_lowercase_from_scope(scope)
     cookies = parse_cookie_header(headers.get("cookie", ""))
-    cid = (cookies.get(CLIENT_BINDING_COOKIE) or "").strip()
-    if cid:
-        return cid
-    device = (headers.get("x-client-binding") or "").strip()
-    if device:
-        return device
-    return client_binding_from_query(scope)
+    return (cookies.get(CLIENT_BINDING_COOKIE) or "").strip()
 
 
 def enhanced_browser_fingerprint_from_meta(meta: dict) -> str:
@@ -91,10 +106,49 @@ def compute_binding_hash(device_id: str, browser_fp: str) -> str:
     return hmac.new(_signing_key(), msg, hashlib.sha256).hexdigest()
 
 
-def binding_from_request(request) -> str:
+def ua_only_browser_fingerprint_from_meta(meta: dict) -> str:
+    """Stable across GET/POST where Client Hints differ (e.g. Safari)."""
+    return meta.get("HTTP_USER_AGENT") or ""
+
+
+def stable_device_login_challenge_binding_from_scope(scope: dict) -> str:
+    """HTTP poll uses cookie + UA; WS login must store the same shape for that device."""
+    dev = client_device_id_from_scope(scope)
+    headers = _headers_lowercase_from_scope(scope)
+    ua = headers.get("user-agent", "")
+    return compute_binding_hash(dev, ua)
+
+
+def poll_binding_matches_device_challenge(request, stored_challenge_hash: str) -> bool:
+    """
+    Match poll request to DeviceLoginChallenge.new_binding_hash.
+
+    New challenges use UA-only fingerprint (stable). Legacy rows use full enhanced
+    fingerprint; accept any variant from the current request (same as session refresh).
+    """
+    dev = client_device_id_from_request(request)
+    if not dev:
+        return False
     meta = request.META
+    stable = compute_binding_hash(dev, ua_only_browser_fingerprint_from_meta(meta))
+    if hmac.compare_digest(stable, stored_challenge_hash):
+        return True
+    for cand in _binding_candidates_for_device_and_fps(
+        dev, _fp_variants_from_meta(meta)
+    ):
+        if hmac.compare_digest(cand, stored_challenge_hash):
+            return True
+    return False
+
+
+def binding_from_request(request, response=None) -> str:
+    meta = request.META
+    if response is not None:
+        device_id = attach_client_binding_cookie_if_needed(request, response)
+    else:
+        device_id = client_device_id_from_request(request)
     return compute_binding_hash(
-        client_device_id_from_request(request),
+        device_id,
         enhanced_browser_fingerprint_from_meta(meta),
     )
 
@@ -110,15 +164,17 @@ def _headers_lowercase_from_scope(scope: dict) -> dict[str, str]:
     return out
 
 
-def client_binding_from_query(scope: dict) -> str:
-    raw = scope.get("query_string", b"") or b""
-    if not raw:
-        return ""
-    qs = parse_qs(raw.decode(), keep_blank_values=True)
-    vals = qs.get("client_binding") or []
-    if not vals:
-        return ""
-    return unquote(vals[0]).strip()
+def ip_and_user_agent_from_scope(scope: dict) -> tuple[str | None, str]:
+    """Best-effort client IP and User-Agent for WebSocket logins (proxy headers)."""
+    headers = _headers_lowercase_from_scope(scope)
+    raw_ip = (
+        (headers.get("cf-connecting-ip") or "").strip()
+        or (headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        or (headers.get("x-real-ip") or "").strip()
+        or ""
+    )
+    ua = headers.get("user-agent", "") or ""
+    return (raw_ip or None, ua)
 
 
 def _fp_variants_from_scope(scope: dict) -> set[str]:
@@ -160,11 +216,7 @@ def _binding_candidates_for_device_and_fps(device: str, fps: set[str]) -> set[st
 def _binding_candidates_from_request(request) -> set[str]:
     dev = client_device_id_from_request(request)
     fps = _fp_variants_from_meta(request.META)
-    cands = _binding_candidates_for_device_and_fps(dev, fps)
-    header_dev = (request.META.get(BINDING_HEADER_META) or "").strip()
-    if header_dev and header_dev != dev:
-        cands |= _binding_candidates_for_device_and_fps(header_dev, fps)
-    return cands
+    return _binding_candidates_for_device_and_fps(dev, fps)
 
 
 def _binding_candidates_from_scope(scope: dict) -> set[str]:
@@ -187,6 +239,7 @@ def browser_fingerprint_from_meta(meta: dict) -> str:
     return enhanced_browser_fingerprint_from_meta(meta)
 
 
-# Backwards compat for imports
 def client_device_id_from_meta(meta: dict) -> str:
-    return (meta.get(BINDING_HEADER_META) or "").strip()
+    """Cookie-only device id from a WSGI-style META dict (needs HTTP_COOKIE)."""
+    cookies = parse_cookie_header(meta.get("HTTP_COOKIE", ""))
+    return (cookies.get(CLIENT_BINDING_COOKIE) or "").strip()

@@ -11,7 +11,12 @@ from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
 
-from .email_html import email_verification, recovery_alert, recovery_otp
+from .email_html import (
+    email_verification,
+    login_attempt_alert,
+    recovery_alert,
+    recovery_otp,
+)
 from .mailout import send_html_email
 from .models import DeviceRecoveryCooldown, EmailVerificationOtp, RecoveryEmailOtp
 
@@ -104,3 +109,26 @@ def send_recovery_alert_email(user, cooldown_until) -> None:
 def send_recovery_otp_email(user, code: str) -> None:
     text, html_body = recovery_otp(code)
     send_html_email(user.email, "Amica: your recovery code", text, html_body)
+
+
+def send_device_login_attempt_email(
+    user,
+    *,
+    request_device: str = "",
+    request_ip: str = "",
+    request_city: str = "",
+    request_country: str = "",
+) -> None:
+    """Notify user by email when a new-device sign-in needs trusted approval."""
+    text, html_body = login_attempt_alert(
+        request_device=request_device or "",
+        request_ip=request_ip or "",
+        request_city=request_city or "",
+        request_country=request_country or "",
+    )
+    send_html_email(
+        user.email,
+        "Amica: sign-in attempt from a new device",
+        text,
+        html_body,
+    )

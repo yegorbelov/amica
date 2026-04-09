@@ -25,6 +25,7 @@ def delete_message_for_user(message, user):
 
 
 def delete_message_for_all(message):
+    message.value = None
     message.deleted_at = datetime.now()
     message.save()
 

@@ -1,64 +1,72 @@
 """Shared device-trust gating after password (or passkey) succeeds."""
 
-from django.utils import timezone
+import logging
 
 from .device_trust import (
     binding_matches_trusted,
     create_device_challenge,
     notify_trusted_devices,
 )
-from .models import DeviceRecoveryCooldown, RecoveryEmailOtp
-from .recovery_service import (
-    create_recovery_otp,
-    send_recovery_otp_email,
-)
+from .recovery_service import send_device_login_attempt_email
+from .session_payload import device_login_notify_extras
+
+logger = logging.getLogger(__name__)
 
 
-def deferred_login_payload(user, binding_hash: str) -> dict | None:
+def deferred_login_payload(
+    user,
+    binding_hash: str,
+    *,
+    device_challenge_binding_hash: str | None = None,
+    request_ip: str | None = None,
+    request_user_agent: str | None = None,
+) -> dict | None:
     """
     If the user should not receive tokens immediately, return a dict for JSON/WS.
     None = proceed with full session issuance.
+
+    OTP is delivered to trusted sessions via WebSocket; the new device only gets
+    challenge_id and must submit the code via device_login_submit_code.
     """
     if not user.trusted_binding_hash or binding_matches_trusted(user, binding_hash):
         return None
 
-    rc = DeviceRecoveryCooldown.objects.filter(
-        user=user, binding_hash=binding_hash
-    ).first()
-    now = timezone.now()
-    if rc:
-        if now < rc.cooldown_until:
-            return {
-                "recovery_cooldown": True,
-                "try_after": rc.cooldown_until.isoformat(),
-                "message": "Try again after this time to sign in with an email code.",
-            }
-        existing = (
-            RecoveryEmailOtp.objects.filter(
-                user=user,
-                binding_hash=binding_hash,
-                consumed=False,
-                expires_at__gt=now,
-            )
-            .order_by("-created_at")
-            .first()
+    ch_hash = (
+        device_challenge_binding_hash
+        if device_challenge_binding_hash is not None
+        else binding_hash
+    )
+    challenge, code = create_device_challenge(
+        user,
+        ch_hash,
+        request_ip=request_ip,
+        request_user_agent=request_user_agent,
+    )
+    extras = device_login_notify_extras(request_ip, request_user_agent)
+    notify_trusted_devices(
+        user.id,
+        challenge.id,
+        request_ip=request_ip,
+        request_user_agent=request_user_agent,
+        request_city=extras["request_city"],
+        request_country=extras["request_country"],
+        request_device=extras["request_device"],
+    )
+    try:
+        send_device_login_attempt_email(
+            user,
+            request_device=extras["request_device"],
+            request_ip=request_ip or "",
+            request_city=extras["request_city"],
+            request_country=extras["request_country"],
         )
-        if existing:
-            return {
-                "needs_recovery_email_otp": True,
-                "otp_id": str(existing.id),
-            }
-        otp, plain = create_recovery_otp(user, binding_hash)
-        send_recovery_otp_email(user, plain)
-        return {
-            "needs_recovery_email_otp": True,
-            "otp_id": str(otp.id),
-        }
-
-    challenge, code = create_device_challenge(user, binding_hash)
-    notify_trusted_devices(user.id, challenge.id)
+    except Exception:
+        logger.exception(
+            "device login attempt email failed for user %s",
+            getattr(user, "pk", user),
+        )
     return {
         "needs_device_confirmation": True,
         "challenge_id": str(challenge.id),
-        "code": code,
+        "request_device": extras["request_device"],
     }

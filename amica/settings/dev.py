@@ -2,6 +2,9 @@ from .base import *
 
 DEBUG = True
 
+# Binding + session cookies must not use Secure on http://localhost (Vite proxy, docker).
+SESSION_COOKIE_SECURE = False
+
 MIDDLEWARE.insert(0, "silk.middleware.SilkyMiddleware")
 
 import re

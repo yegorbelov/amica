@@ -38,6 +38,54 @@ def recovery_otp(code: str) -> tuple[str, str]:
     return text, html_body
 
 
+def login_attempt_alert(
+    *,
+    request_device: str,
+    request_ip: str,
+    request_city: str,
+    request_country: str,
+) -> tuple[str, str]:
+    """Email when sign-in starts device-confirmation flow (new binding)."""
+    lines = [
+        "Hello,",
+        "",
+        "Someone is trying to sign in to your Amica account from a device or browser "
+        "that is not your trusted device yet.",
+        "",
+    ]
+    if request_device.strip():
+        lines.append(f"Device: {request_device.strip()}")
+    if request_ip.strip():
+        lines.append(f"Approximate IP: {request_ip.strip()}")
+    loc = ", ".join(
+        p for p in (request_city.strip(), request_country.strip()) if p
+    )
+    if loc:
+        lines.append(f"Approximate location: {loc}")
+    lines.extend(
+        [
+            "",
+            "If this was you: open Amica on a trusted device to allow the sign-in, or use a "
+            "backup code on the new device.",
+            "",
+            "If this was not you: change your password immediately.",
+            "",
+            "— Amica",
+        ]
+    )
+    text = "\n".join(lines)
+    html_body = _render(
+        "login_attempt_alert.html",
+        {
+            "request_device": request_device.strip(),
+            "request_ip": request_ip.strip(),
+            "request_city": request_city.strip(),
+            "request_country": request_country.strip(),
+        },
+    )
+    return text, html_body
+
+
 def recovery_alert(cooldown_display: str) -> tuple[str, str]:
     text = (
         f"Hello,\n\n"

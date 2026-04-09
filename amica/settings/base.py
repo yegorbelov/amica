@@ -53,7 +53,9 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 SESSION_COOKIE_AGE = 1209600
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
-SESSION_COOKIE_SECURE = True
+# False required for http://localhost dev (Safari/Chrome reject Secure cookies on HTTP).
+# Override in .env if needed; amica.settings.dev forces False after importing base.
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 
@@ -262,7 +264,7 @@ CORS_PREFLIGHT_MAX_AGE = 86400
 try:
     from corsheaders.defaults import default_headers
 
-    CORS_ALLOW_HEADERS = list(default_headers) + ["x-client-binding"]
+    CORS_ALLOW_HEADERS = list(default_headers)
 except ImportError:
     CORS_ALLOW_HEADERS = [
         "accept",
@@ -274,7 +276,6 @@ except ImportError:
         "user-agent",
         "x-csrftoken",
         "x-requested-with",
-        "x-client-binding",
     ]
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")

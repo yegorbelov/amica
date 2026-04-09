@@ -3,8 +3,10 @@
 .body-outer {
   margin: 0;
   padding: 0;
-  background: #e8ecff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+  background: #ffffff;
+  color: #000000;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
     Arial, sans-serif;
 }
 
@@ -22,30 +24,33 @@
 }
 
 .shell {
-  background: linear-gradient(165deg, #e0e7ff 0%, #fae8ff 45%, #fef3c7 100%);
   min-height: 100%;
 }
 
 .shell-pad {
-  padding: 40px 16px;
+  padding: 32px 16px;
 }
 
 .card {
   max-width: 520px;
   background: #ffffff;
-  border-radius: 20px;
-  box-shadow: 0 25px 50px -12px rgba(79, 70, 229, 0.15),
-    0 0 0 1px rgba(99, 102, 241, 0.06);
-  overflow: hidden;
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  overflow: visible;
 }
 
 .card-accent {
-  height: 4px;
-  background: linear-gradient(90deg, #6366f1, #a855f7, #f59e0b);
+  display: none;
+  height: 0;
+  max-height: 0;
+  overflow: hidden;
+  line-height: 0;
+  font-size: 0;
 }
 
 .card-body {
-  padding: 36px 32px 28px;
+  padding: 0 0 24px;
 }
 
 .brand {
@@ -53,24 +58,24 @@
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: #1e1b4b;
+  color: #000000;
 }
 
 .footer-legal {
-  padding: 0 32px 32px;
+  padding: 0 0 24px;
 }
 
 .footer-legal p {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: #94a3b8;
+  color: #000000;
 }
 
 .copyright {
-  margin: 24px 0 0;
+  margin: 16px 0 0;
   font-size: 11px;
-  color: #64748b;
+  color: #000000;
 }
 
 .h1 {
@@ -78,32 +83,32 @@
   font-size: 24px;
   font-weight: 700;
   line-height: 1.25;
-  color: #0f172a;
+  color: #000000;
 }
 
 .lead {
   margin: 0 0 24px;
   font-size: 16px;
   line-height: 1.55;
-  color: #475569;
+  color: #000000;
 }
 
 .muted {
   margin: 0;
   font-size: 14px;
   line-height: 1.55;
-  color: #64748b;
+  color: #000000;
 }
 
 .muted strong {
-  color: #334155;
+  color: #000000;
 }
 
 .otp-label {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: #000000;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -113,53 +118,68 @@
 }
 
 .otp-box {
-  background: linear-gradient(135deg, #f5f3ff 0%, #fff7ed 100%);
-  border-radius: 14px;
-  border: 1px solid #e0e7ff;
-  padding: 18px 28px;
+  border-radius: 0;
+  border: none;
+  background: #ffffff;
+  padding: 18px 0;
 }
 
 .otp-code {
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
   font-size: 32px;
   font-weight: 700;
   letter-spacing: 0.35em;
-  color: #312e81;
+  color: #000000;
 }
 
 .alert-box {
   margin: 0 0 24px;
-  background: #fffbeb;
-  border-radius: 14px;
-  border: 1px solid #fde68a;
+  background: #ffffff;
+  border-radius: 0;
+  border: none;
 }
 
 .alert-box td.alert-box-inner {
-  padding: 16px 18px;
+  padding: 16px 0;
 }
 
 .alert-box p {
   margin: 0;
   font-size: 14px;
   line-height: 1.55;
-  color: #92400e;
+  color: #000000;
+}
+
+.alert-box p + p {
+  margin-top: 12px;
 }
 
 .cooldown-label {
   margin: 0 0 8px;
   font-size: 14px;
   line-height: 1.55;
-  color: #475569;
+  color: #000000;
 }
 
 .cooldown-time {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
-  color: #1e293b;
+  color: #000000;
 }
 
 .lead .emph {
-  color: #334155;
+  color: #000000;
   font-weight: 600;
+}
+
+.meta-line {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #000000;
+}
+
+.meta-line strong {
+  color: #000000;
 }

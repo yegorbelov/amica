@@ -1,0 +1,24 @@
+{% extends "accounts/email/base.html" %}
+{% block title %}Amica security notice{% endblock %}
+{% block preheader %}Sign-in attempt on your Amica account.{% endblock %}
+{% block content %}
+<h1 class="h1">Sign-in attempt</h1>
+<p class="lead">A sign-in was started from a <span class="emph">new device or browser</span> that is not your trusted device yet.</p>
+{% if request_device %}
+<p class="meta-line"><strong>Device:</strong> {{ request_device }}</p>
+{% endif %}
+{% if request_ip %}
+<p class="meta-line"><strong>Approximate IP:</strong> {{ request_ip }}</p>
+{% endif %}
+{% if request_city or request_country %}
+<p class="meta-line"><strong>Approximate location:</strong> {% if request_city %}{{ request_city }}{% endif %}{% if request_city and request_country %}, {% endif %}{% if request_country %}{{ request_country }}{% endif %}</p>
+{% endif %}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="alert-box">
+<tr>
+<td class="alert-box-inner">
+<p><strong>Was this you?</strong> Approve the request in Amica on a trusted device, or use a backup code on the new device.</p>
+<p><strong>Not you?</strong> Change your password immediately.</p>
+</td>
+</tr>
+</table>
+{% endblock %}

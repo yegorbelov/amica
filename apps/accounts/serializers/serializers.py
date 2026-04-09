@@ -43,6 +43,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     profile = ProfileSerializer(read_only=True)
     dm_chat_id = serializers.SerializerMethodField()
+    has_trusted_device = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
@@ -53,12 +54,16 @@ class UserSerializer(serializers.ModelSerializer):
             "profile",
             "preferred_session_lifetime_days",
             "dm_chat_id",
+            "has_trusted_device",
         )
         read_only_fields = fields
 
     def get_dm_chat_id(self, obj):
         mapping = self.context.get("dm_chat_by_peer_id") or {}
         return mapping.get(obj.id)
+
+    def get_has_trusted_device(self, obj):
+        return bool((obj.trusted_binding_hash or "").strip())
 
     # def to_representation(self, instance):
     #     ret = super().to_representation(instance)
@@ -98,9 +103,14 @@ class ActiveSessionSerializer(serializers.ModelSerializer):
             "_active_session_geo",
             {"geo": GeoIP2(), "ips": {}},
         )
+        trusted_bh = None
+        if request and request.user.is_authenticated:
+            raw = getattr(request.user, "trusted_binding_hash", None) or ""
+            trusted_bh = raw.strip() or None
         return active_session_model_to_dict(
             instance,
             current_jti=current_jti,
             geo=bucket["geo"],
             ip_cache=bucket["ips"],
+            trusted_binding_hash=trusted_bh,
         )

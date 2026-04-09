@@ -122,7 +122,7 @@ class ActiveSession(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
 
-    # HMAC-SHA256 hex; binds tokens to X-Client-Binding + browser hints (see session_binding).
+    # HMAC-SHA256 hex; binds tokens to amica_client_binding_id cookie + browser hints (see session_binding).
     binding_hash = models.CharField(max_length=64, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -157,7 +157,12 @@ class DeviceLoginChallenge(models.Model):
     )
     new_binding_hash = models.CharField(max_length=64)
     code_hash = models.CharField(max_length=64)
+    # Client attempting login (new device), for display on trusted device
+    request_ip = models.GenericIPAddressField(null=True, blank=True)
+    request_user_agent = models.TextField(blank=True, default="")
     attempts = models.PositiveSmallIntegerField(default=0)
+    # Plain OTP for trusted client after Allow; cleared on reject / complete.
+    pending_otp = models.CharField(max_length=6, blank=True, default="")
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -243,3 +248,30 @@ class RecoveryEmailOtp(models.Model):
 
     def __str__(self):
         return f"RecoveryEmailOtp({self.user_id}, consumed={self.consumed})"
+
+
+class AccountBackupCode(models.Model):
+    """HMAC-SHA256(secret, normalized code); plaintext shown only at creation."""
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="backup_codes",
+    )
+    code_hash = models.CharField(max_length=64)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "used_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "code_hash"],
+                name="accounts_backupcode_user_hash_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AccountBackupCode(user={self.user_id}, used={self.used_at is not None})"

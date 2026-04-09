@@ -3,6 +3,7 @@
 import re
 
 from django.contrib.gis.geoip2 import GeoIP2
+from django.utils.crypto import constant_time_compare
 
 from apps.accounts.models import ActiveSession
 
@@ -52,6 +53,11 @@ def parse_device_from_user_agent(user_agent: str) -> str:
             break
 
     os_str = f"{os_name} {os_version}" if os_version else os_name
+    if os_name == "iOS":
+        if "iPad" in ua:
+            os_str = f"iPad {os_version}".strip() if os_version else "iPad"
+        elif "iPhone" in ua or "iPod" in ua:
+            os_str = f"iPhone {os_version}".strip() if os_version else "iPhone"
     browser_str = f"{browser} {browser_version}" if browser_version else browser
 
     return f"{browser_str} on {os_str}"
@@ -76,8 +82,20 @@ def city_country_for_ip(
     return result
 
 
-def active_session_model_to_dict(instance: ActiveSession, *, current_jti, geo, ip_cache):
+def active_session_model_to_dict(
+    instance: ActiveSession,
+    *,
+    current_jti,
+    geo,
+    ip_cache,
+    trusted_binding_hash: str | None = None,
+):
     city, country = city_country_for_ip(instance.ip_address, geo, ip_cache)
+    tb = (trusted_binding_hash or "").strip()
+    bh = (instance.binding_hash or "").strip()
+    is_trusted = bool(
+        tb and bh and constant_time_compare(bh, tb)
+    )
     return {
         "jti": instance.jti,
         "ip_address": instance.ip_address or "",
@@ -89,6 +107,30 @@ def active_session_model_to_dict(instance: ActiveSession, *, current_jti, geo, i
         "device": parse_device_from_user_agent(instance.user_agent or ""),
         "city": city,
         "country": country,
+        "is_trusted": is_trusted,
+    }
+
+
+def device_login_notify_extras(
+    request_ip,
+    request_user_agent: str | None,
+) -> dict[str, str]:
+    """
+    GeoIP city/country + parsed device string for trusted-device login alerts
+    (same GeoIP path as active sessions).
+    """
+    city, country = None, None
+    if request_ip:
+        try:
+            geo = GeoIP2()
+            city, country = city_country_for_ip(request_ip, geo, {})
+        except Exception:
+            pass
+    device = parse_device_from_user_agent(request_user_agent or "")
+    return {
+        "request_city": city or "",
+        "request_country": country or "",
+        "request_device": device,
     }
 
 
@@ -97,7 +139,14 @@ def serialize_active_sessions_for_ws_user(user, current_jti):
     geo = GeoIP2()
     ip_cache = {}
     sessions = ActiveSession.objects.filter(user=user).order_by("-created_at")
+    tb = (getattr(user, "trusted_binding_hash", None) or "").strip() or None
     return [
-        active_session_model_to_dict(s, current_jti=current_jti, geo=geo, ip_cache=ip_cache)
+        active_session_model_to_dict(
+            s,
+            current_jti=current_jti,
+            geo=geo,
+            ip_cache=ip_cache,
+            trusted_binding_hash=tb,
+        )
         for s in sessions
     ]

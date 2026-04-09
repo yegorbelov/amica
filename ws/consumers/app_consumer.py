@@ -16,13 +16,22 @@ from apps.accounts.services.sessions import (
     revoke_other_active_sessions_for_user,
     update_user_session_lifetime,
 )
-from apps.accounts.device_trust import ensure_trusted_from_session_binding
+from apps.accounts.backup_codes import verify_and_consume_backup_code
+from apps.accounts.device_trust import (
+    binding_matches_trusted,
+    ensure_trusted_from_session_binding,
+)
 from apps.accounts.login_gate import deferred_login_payload
 from apps.accounts.recovery_service import (
     create_email_verification_otp,
     send_email_verification_code_email,
 )
-from apps.accounts.session_binding import binding_from_scope, session_binding_matches_session
+from apps.accounts.session_binding import (
+    binding_from_scope,
+    ip_and_user_agent_from_scope,
+    session_binding_matches_session,
+    stable_device_login_challenge_binding_from_scope,
+)
 from apps.accounts.views import (
     create_refresh_token_for_user,
     get_access_token_for_session,
@@ -835,7 +844,7 @@ class AppConsumer(BaseConsumer):
                 {"type": "error", "message": "Invalid refresh token"}
             )
 
-    def _do_login(self, username_or_email, password):
+    def _do_login(self, username_or_email, password, backup_code=""):
         from django.contrib.auth import authenticate
 
         user = authenticate(username=username_or_email, password=password)
@@ -847,9 +856,27 @@ class AppConsumer(BaseConsumer):
                 "email": user.email,
             }
         binding = binding_from_scope(self.scope)
-        gate = deferred_login_payload(user, binding)
-        if gate:
-            return gate
+        challenge_binding = stable_device_login_challenge_binding_from_scope(
+            self.scope
+        )
+        if not binding_matches_trusted(user, binding):
+            if backup_code:
+                if not verify_and_consume_backup_code(user, backup_code):
+                    return {"error": "invalid_backup_code"}
+                User = get_user_model()
+                User.objects.filter(pk=user.pk).update(trusted_binding_hash=binding)
+                user.trusted_binding_hash = binding
+            else:
+                req_ip, req_ua = ip_and_user_agent_from_scope(self.scope)
+                gate = deferred_login_payload(
+                    user,
+                    binding,
+                    device_challenge_binding_hash=challenge_binding,
+                    request_ip=req_ip,
+                    request_user_agent=req_ua,
+                )
+                if gate:
+                    return gate
         refresh = create_refresh_token_for_user(user)
         ws_session = remember_session_from_scope(self.scope, user, refresh)
         ensure_trusted_from_session_binding(user, ws_session.binding_hash)
@@ -891,7 +918,10 @@ class AppConsumer(BaseConsumer):
                     {"type": "login_response", "error": "username and password required"}
                 )
                 return
-            result = await database_sync_to_async(self._do_login)(identifier, password)
+            backup_code = (data.get("backup_code") or "").strip()
+            result = await database_sync_to_async(self._do_login)(
+                identifier, password, backup_code
+            )
             if not result:
                 await self.send_json(
                     {"type": "login_response", "error": "Invalid credentials"}
@@ -906,23 +936,9 @@ class AppConsumer(BaseConsumer):
                     }
                 )
                 return
-            if result.get("recovery_cooldown"):
+            if result.get("error") == "invalid_backup_code":
                 await self.send_json(
-                    {
-                        "type": "login_response",
-                        "recovery_cooldown": True,
-                        "try_after": result.get("try_after"),
-                        "message": result.get("message"),
-                    }
-                )
-                return
-            if result.get("needs_recovery_email_otp"):
-                await self.send_json(
-                    {
-                        "type": "login_response",
-                        "needs_recovery_email_otp": True,
-                        "otp_id": result.get("otp_id"),
-                    }
+                    {"type": "login_response", "error": "invalid_backup_code"}
                 )
                 return
             if result.get("needs_device_confirmation"):
@@ -931,7 +947,7 @@ class AppConsumer(BaseConsumer):
                         "type": "login_response",
                         "needs_device_confirmation": True,
                         "challenge_id": result["challenge_id"],
-                        "code": result["code"],
+                        "request_device": result.get("request_device") or "",
                     }
                 )
                 return
@@ -1152,8 +1168,9 @@ class AppConsumer(BaseConsumer):
             message = Message.objects.filter(id=message_id).first()
             if not message or message.user_id != user.id:
                 return False
+            message.value = None
             message.deleted_at = timezone.now()
-            message.save(update_fields=["deleted_at"])
+            message.save(update_fields=["value", "deleted_at"])
             return True
         except Exception as e:
             logger.error(f"Error deleting message: {e}")
@@ -1351,6 +1368,11 @@ class AppConsumer(BaseConsumer):
             {
                 "type": "device_login_pending",
                 "challenge_id": event.get("challenge_id"),
+                "request_ip": event.get("request_ip") or "",
+                "request_user_agent": event.get("request_user_agent") or "",
+                "request_city": event.get("request_city") or "",
+                "request_country": event.get("request_country") or "",
+                "request_device": event.get("request_device") or "",
             }
         )
 

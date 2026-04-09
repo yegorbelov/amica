@@ -42,22 +42,41 @@ def binding_matches_trusted(user, binding_hash: str) -> bool:
     return binding_hash == user.trusted_binding_hash
 
 
-def create_device_challenge(user, new_binding_hash: str) -> tuple[DeviceLoginChallenge, str]:
+def create_device_challenge(
+    user,
+    new_binding_hash: str,
+    *,
+    request_ip: str | None = None,
+    request_user_agent: str | None = None,
+) -> tuple[DeviceLoginChallenge, str]:
     DeviceLoginChallenge.objects.filter(
         user=user, status=DeviceLoginChallenge.Status.PENDING
     ).update(status=DeviceLoginChallenge.Status.EXPIRED)
 
     code = f"{secrets.randbelow(1_000_000):06d}"
+    ua = (request_user_agent or "").strip()[:2000]
     challenge = DeviceLoginChallenge.objects.create(
         user=user,
         new_binding_hash=new_binding_hash,
         code_hash=_hash_code(code),
+        pending_otp=code,
+        request_ip=request_ip or None,
+        request_user_agent=ua,
         expires_at=timezone.now() + CHALLENGE_TTL,
     )
     return challenge, code
 
 
-def notify_trusted_devices(user_id: int, challenge_id) -> None:
+def notify_trusted_devices(
+    user_id: int,
+    challenge_id,
+    *,
+    request_ip: str | None = None,
+    request_user_agent: str | None = None,
+    request_city: str = "",
+    request_country: str = "",
+    request_device: str = "",
+) -> None:
     try:
         channel_layer = get_channel_layer()
         if not channel_layer:
@@ -67,6 +86,11 @@ def notify_trusted_devices(user_id: int, challenge_id) -> None:
             {
                 "type": "device_login_pending",
                 "challenge_id": str(challenge_id),
+                "request_ip": request_ip or "",
+                "request_user_agent": (request_user_agent or "")[:2000],
+                "request_city": request_city or "",
+                "request_country": request_country or "",
+                "request_device": (request_device or "")[:500],
             },
         )
     except Exception as e:
