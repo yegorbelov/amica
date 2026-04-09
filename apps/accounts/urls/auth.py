@@ -29,6 +29,11 @@ urlpatterns = [
         name="device_login_submit_code",
     ),
     path(
+        "device-login/resend/",
+        views.device_login_resend_notify,
+        name="device_login_resend_notify",
+    ),
+    path(
         "device-login/trusted-decision/",
         views.device_login_trusted_decision,
         name="device_login_trusted_decision",

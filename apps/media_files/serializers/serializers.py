@@ -1,7 +1,39 @@
+from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
 
 from ..models import *
+
+
+def absolute_media_url(relative_or_absolute, request=None):
+    """
+    Browser-loadable URL for protected media.
+
+    WebSocket / background senders pass serializers without ``request``; ``reverse()`` alone
+    yields a path like ``/api/protected-file/...`` which is wrong inside ``<video src>``
+    (same-origin as the SPA). Prefer ``request.build_absolute_uri`` when present, else
+    ``SITE_SCHEME`` + ``SITE_DOMAIN`` (must be reachable from the client, not an internal
+    Docker hostname).
+    """
+    if relative_or_absolute is None:
+        return None
+    s = str(relative_or_absolute).strip()
+    if not s:
+        return s
+    if s.startswith("http://") or s.startswith("https://"):
+        return s
+    if request is not None and hasattr(request, "build_absolute_uri"):
+        try:
+            return request.build_absolute_uri(s)
+        except Exception:
+            pass
+    scheme = getattr(settings, "SITE_SCHEME", "http") or "http"
+    domain = (getattr(settings, "SITE_DOMAIN", None) or "").strip()
+    if domain:
+        base = f"{scheme}://{domain}".rstrip("/")
+        path = s if s.startswith("/") else f"/{s}"
+        return f"{base}{path}"
+    return s
 
 
 class DisplayPhotoSerializer(serializers.ModelSerializer):
@@ -26,9 +58,7 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             url = reverse(
                 "protected-file-versioned", args=[obj.id, "display_photo", version]
             )
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            return absolute_media_url(url, request)
         return None
 
     def get_small(self, obj):
@@ -50,7 +80,7 @@ class DisplayPhotoSerializer(serializers.ModelSerializer):
             return None
 
         request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        return absolute_media_url(url, request)
 
 
 class DisplayVideoSerializer(serializers.ModelSerializer):
@@ -80,7 +110,7 @@ class DisplayVideoSerializer(serializers.ModelSerializer):
             return None
 
         request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        return absolute_media_url(url, request)
 
     def get_type(self, obj):
         return "video"
@@ -180,9 +210,7 @@ class FileSerializer(serializers.ModelSerializer):
             # Version segment busts browser cache when bytes change in place (same id).
             v = str(obj.file_size) if obj.file_size else str(obj.pk)
             url = reverse("protected-file-versioned", args=[obj.id, v])
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            return absolute_media_url(url, request)
         return None
 
 
@@ -206,9 +234,7 @@ class ImageFileSerializer(FileSerializer):
         if getattr(obj, version, None):
             request = self.context.get("request")
             url = reverse("protected-file-versioned", args=[obj.id, version])
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            return absolute_media_url(url, request)
         return None
 
     def get_thumbnail_small_url(self, obj):
@@ -269,6 +295,4 @@ class AudioFileSerializer(FileSerializer):
 
         url = reverse("protected-file-versioned", args=[obj.id, "cover"])
         request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(url)
-        return url
+        return absolute_media_url(url, request)

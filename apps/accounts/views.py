@@ -53,6 +53,7 @@ from .recovery_service import (
     verify_six_digit_against_hash,
 )
 from .serializers.serializers import ActiveSessionSerializer, UserSerializer
+from .tasks import deliver_device_login_trusted_notifications
 from .totp_service import user_totp_gate_ok
 from .session_binding import (
     JWT_BINDING_CLAIM,
@@ -455,6 +456,50 @@ def device_login_submit_code(request):
         locked.save(update_fields=["status", "pending_otp"])
 
     return Response({"success": True})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def device_login_resend_notify(request):
+    """
+    Same client as the pending challenge: re-push WebSocket + email to trusted devices.
+    """
+    challenge_id = request.data.get("challenge_id")
+    if not challenge_id:
+        return Response(
+            {"error": "challenge_id required"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    challenge = DeviceLoginChallenge.objects.filter(id=challenge_id).first()
+    if not challenge:
+        return Response(
+            {"error": "Invalid or expired challenge"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if challenge.status == DeviceLoginChallenge.Status.REJECTED:
+        return Response(
+            {"error": "rejected"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not poll_binding_matches_device_challenge(request, challenge.new_binding_hash):
+        return Response({"error": "wrong_client"}, status=status.HTTP_403_FORBIDDEN)
+
+    now = timezone.now()
+    if challenge.status != DeviceLoginChallenge.Status.PENDING:
+        return Response(
+            {"error": "Invalid or expired challenge"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if challenge.expires_at <= now:
+        challenge.status = DeviceLoginChallenge.Status.EXPIRED
+        challenge.pending_otp = ""
+        challenge.save(update_fields=["status", "pending_otp"])
+        return Response({"error": "Challenge expired"}, status=status.HTTP_410_GONE)
+
+    deliver_device_login_trusted_notifications.delay(str(challenge.id))
+    return Response({"ok": True})
 
 
 @api_view(["POST"])

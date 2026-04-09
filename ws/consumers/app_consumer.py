@@ -5,6 +5,7 @@ import logging
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -163,6 +164,7 @@ class AppConsumer(BaseConsumer):
                 "delete_chat",
                 "add_group_member",
                 "remove_group_member",
+                "rename_group",
             )
             and not chat_id
         ):
@@ -183,6 +185,10 @@ class AppConsumer(BaseConsumer):
                 await self.handle_add_group_member(data, data.get("chat_id"))
             elif message_type == "remove_group_member":
                 await self.handle_remove_group_member(data, data.get("chat_id"))
+            elif message_type == "rename_group":
+                await self.handle_rename_group(data, data.get("chat_id"))
+            elif message_type == "update_username":
+                await self.handle_update_username(data)
             elif message_type == "message_reaction":
                 await self.handle_message_reaction(data)
             elif message_type == "message_viewed":
@@ -425,23 +431,47 @@ class AppConsumer(BaseConsumer):
             )
             return
 
-        new_user_id = (data.get("data") or {}).get("user_id")
-        if new_user_id is None:
+        inner = data.get("data") or {}
+        raw_ids = inner.get("user_ids")
+        single_id = inner.get("user_id")
+
+        to_add = []
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list):
+                await self.send_json(
+                    {"type": "error", "message": "user_ids must be a list"}
+                )
+                return
+            for x in raw_ids:
+                try:
+                    to_add.append(int(x))
+                except (TypeError, ValueError):
+                    await self.send_json(
+                        {"type": "error", "message": "user_ids must be numbers"}
+                    )
+                    return
+        elif single_id is not None:
+            try:
+                to_add = [int(single_id)]
+            except (TypeError, ValueError):
+                await self.send_json(
+                    {"type": "error", "message": "user_id must be a number"}
+                )
+                return
+        else:
             await self.send_json(
-                {"type": "error", "message": "user_id is required"}
-            )
-            return
-        try:
-            new_user_id = int(new_user_id)
-        except (TypeError, ValueError):
-            await self.send_json(
-                {"type": "error", "message": "user_id must be a number"}
+                {"type": "error", "message": "user_id or user_ids is required"}
             )
             return
 
-        err = await self.try_add_group_member(chat_id, new_user_id)
+        added, err = await self.try_add_group_members_bulk(chat_id, to_add)
         if err:
             await self.send_json({"type": "error", "message": err})
+            return
+        if not added:
+            await self.send_json(
+                {"type": "error", "message": "No users were added"}
+            )
             return
 
         user_ids = await self.get_chat_user_ids(chat_id)
@@ -450,7 +480,7 @@ class AppConsumer(BaseConsumer):
         async def send_one(uid):
             async with semaphore:
                 body = await self.build_group_members_updated_event(
-                    chat_id, uid, new_user_id
+                    chat_id, uid, added
                 )
                 payload_safe = json.loads(json.dumps(body, default=str))
                 await self.send_to_user_group(
@@ -517,6 +547,79 @@ class AppConsumer(BaseConsumer):
                 )
 
         await asyncio.gather(*(send_one(uid) for uid in remaining_ids))
+
+    async def handle_rename_group(self, data, chat_id):
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+        raw = (data.get("data") or {}).get("name")
+        if raw is None:
+            await self.send_json(
+                {"type": "error", "message": "name is required"}
+            )
+            return
+        name = str(raw).strip()
+        err = await self.try_rename_group(chat_id, name)
+        if err:
+            await self.send_json(
+                {"type": "rename_group_response", "ok": False, "error": err}
+            )
+            return
+
+        await self.send_json(
+            {
+                "type": "rename_group_response",
+                "ok": True,
+                "chat_id": chat_id,
+                "name": name,
+            }
+        )
+
+        user_ids = await self.get_chat_user_ids(chat_id)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_rename(uid):
+            async with semaphore:
+                await self.send_to_user_group(
+                    uid,
+                    "group_renamed",
+                    chat_id=chat_id,
+                    name=name,
+                )
+
+        await asyncio.gather(*(send_rename(uid) for uid in user_ids))
+
+    async def handle_update_username(self, data):
+        raw = (data.get("data") or {}).get("username")
+        if raw is None:
+            await self.send_json(
+                {
+                    "type": "update_username_response",
+                    "error": "username is required",
+                }
+            )
+            return
+        err, user_data = await self.try_update_username(str(raw))
+        if err:
+            await self.send_json(
+                {"type": "update_username_response", "error": err}
+            )
+            return
+        await self.send_json(
+            {
+                "type": "update_username_response",
+                "user": user_data,
+            }
+        )
 
     async def handle_create_group(self, data):
         raw = (data.get("data") or {}).get("name")
@@ -1046,8 +1149,66 @@ class AppConsumer(BaseConsumer):
         )
 
     @database_sync_to_async
-    def try_add_group_member(self, chat_id, new_user_id):
+    def try_add_group_members_bulk(self, chat_id, user_ids):
+        """Returns (added_user_ids, error_message). added_user_ids may be empty."""
         User = get_user_model()
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return [], "Chat not found"
+        if not chat.is_group:
+            return [], "Not a group chat"
+        if not chat.users.filter(id=self.user.id).exists():
+            return [], "Not a member of chat"
+
+        seen = set()
+        ordered = []
+        for uid in user_ids:
+            try:
+                i = int(uid)
+            except (TypeError, ValueError):
+                return [], "user_id must be a number"
+            if i in seen:
+                continue
+            seen.add(i)
+            ordered.append(i)
+
+        if not ordered:
+            return [], "user_id or user_ids is required"
+
+        to_create = []
+        for new_user_id in ordered:
+            if new_user_id == self.user.id:
+                continue
+            try:
+                User.objects.get(id=new_user_id)
+            except User.DoesNotExist:
+                return [], "User not found"
+            if chat.users.filter(id=new_user_id).exists():
+                continue
+            to_create.append(new_user_id)
+
+        if not to_create:
+            return [], None
+
+        added = []
+        with transaction.atomic():
+            for new_user_id in to_create:
+                new_user = User.objects.get(id=new_user_id)
+                ChatMember.objects.create(
+                    chat=chat, user=new_user, role=ChatMember.Role.MEMBER
+                )
+                added.append(new_user_id)
+
+        self.chat_users_cache.pop(chat_id, None)
+        return added, None
+
+    @database_sync_to_async
+    def try_rename_group(self, chat_id, name):
+        if not name:
+            return "Name cannot be empty"
+        if len(name) > 64:
+            return "Name is too long"
         try:
             chat = Chat.objects.get(id=chat_id)
         except Chat.DoesNotExist:
@@ -1056,24 +1217,27 @@ class AppConsumer(BaseConsumer):
             return "Not a group chat"
         if not chat.users.filter(id=self.user.id).exists():
             return "Not a member of chat"
-        if new_user_id == self.user.id:
-            return "Cannot add yourself"
-        try:
-            new_user = User.objects.get(id=new_user_id)
-        except User.DoesNotExist:
-            return "User not found"
-        if chat.users.filter(id=new_user_id).exists():
-            return "User is already in this chat"
-        ChatMember.objects.create(
-            chat=chat, user=new_user, role=ChatMember.Role.MEMBER
-        )
-        self.chat_users_cache.pop(chat_id, None)
+        chat.name = name
+        chat.save(update_fields=["name"])
         return None
 
     @database_sync_to_async
+    def try_update_username(self, raw_username):
+        username = (raw_username or "").strip()
+        if not username:
+            return "Username cannot be empty", None
+        if len(username) > 64:
+            return "Username is too long", None
+        self.user.username = username
+        self.user.save(update_fields=["username"])
+        user_data = UserSerializer(self.user, context={"user": self.user}).data
+        return None, user_data
+
+    @database_sync_to_async
     def build_group_members_updated_event(
-        self, chat_id, recipient_id, invitee_user_id=None
+        self, chat_id, recipient_id, invitee_user_ids=None
     ):
+        invitee_set = frozenset(invitee_user_ids or [])
         User = get_user_model()
         recipient = User.objects.select_related("profile").get(id=recipient_id)
         chat = Chat.objects.prefetch_related(
@@ -1090,10 +1254,7 @@ class AppConsumer(BaseConsumer):
             "members": members_data,
             "users_count": users_count,
         }
-        if (
-            invitee_user_id is not None
-            and recipient_id == invitee_user_id
-        ):
+        if invitee_set and recipient_id in invitee_set:
             lst = get_chats_list(recipient, chat_ids=[chat_id])
             rows = lst.get("chats") or []
             if rows:

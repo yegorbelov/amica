@@ -1,16 +1,8 @@
 """Shared device-trust gating after password (or passkey) succeeds."""
 
-import logging
-
-from .device_trust import (
-    binding_matches_trusted,
-    create_device_challenge,
-    notify_trusted_devices,
-)
-from .recovery_service import send_device_login_attempt_email
-from .session_payload import device_login_notify_extras, trusted_device_minimal_label
-
-logger = logging.getLogger(__name__)
+from .device_trust import binding_matches_trusted, create_device_challenge
+from .session_payload import trusted_device_minimal_label
+from .tasks import deliver_device_login_trusted_notifications
 
 
 def deferred_login_payload(
@@ -37,37 +29,13 @@ def deferred_login_payload(
         if device_challenge_binding_hash is not None
         else binding_hash
     )
-    challenge, code = create_device_challenge(
+    challenge, _ = create_device_challenge(
         user,
         ch_hash,
         request_ip=request_ip,
         request_user_agent=request_user_agent,
     )
-    extras = device_login_notify_extras(
-        request_ip, request_user_agent, include_versions=True
-    )
-    notify_trusted_devices(
-        user.id,
-        challenge.id,
-        request_ip=request_ip,
-        request_user_agent=request_user_agent,
-        request_city=extras["request_city"],
-        request_country=extras["request_country"],
-        request_device=extras["request_device"],
-    )
-    try:
-        send_device_login_attempt_email(
-            user,
-            request_device=extras["request_device"],
-            request_ip=request_ip or "",
-            request_city=extras["request_city"],
-            request_country=extras["request_country"],
-        )
-    except Exception:
-        logger.exception(
-            "device login attempt email failed for user %s",
-            getattr(user, "pk", user),
-        )
+    deliver_device_login_trusted_notifications.delay(str(challenge.id))
     return {
         "needs_device_confirmation": True,
         "challenge_id": str(challenge.id),
