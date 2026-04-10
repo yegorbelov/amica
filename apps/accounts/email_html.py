@@ -38,6 +38,15 @@ def recovery_otp(code: str) -> tuple[str, str]:
     return text, html_body
 
 
+def device_login_email_otp(code: str) -> tuple[str, str]:
+    text = (
+        f"Your Amica sign-in code is: {code}\n\n"
+        f"It expires in 10 minutes. If you did not try to sign in, change your password.\n"
+    )
+    html_body = _render("verify_email.html", {"code": code})
+    return text, html_body
+
+
 def login_attempt_alert(
     *,
     request_device: str,

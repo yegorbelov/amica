@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.accounts.models import ActiveSession
+from apps.accounts.models import ActiveSession, DeviceLoginChallenge
 from apps.accounts.serializers.serializers import UserSerializer
 from apps.accounts.session_payload import serialize_active_sessions_for_ws_user
 from apps.accounts.services.sessions import (
@@ -20,8 +20,8 @@ from apps.accounts.services.sessions import (
 from apps.accounts.backup_codes import verify_and_consume_backup_code
 from apps.accounts.totp_service import user_totp_gate_ok
 from apps.accounts.device_trust import (
-    binding_matches_trusted,
-    ensure_trusted_from_session_binding,
+    binding_matches_active_session,
+    has_active_sessions,
 )
 from apps.accounts.login_gate import deferred_login_payload
 from apps.accounts.recovery_service import (
@@ -104,6 +104,13 @@ class AppConsumer(BaseConsumer):
         self.pending_chunk_ack_request_ids = []
         self.pending_chunk_ack_chunk_indexes = []
         self.pending_chunk_ack_flush_task = None
+        self.device_login_groups = set()
+
+    async def disconnect(self, close_code):
+        for group_name in list(self.device_login_groups):
+            await self.channel_layer.group_discard(group_name, self.channel_name)
+        self.device_login_groups.clear()
+        await super().disconnect(close_code)
 
     async def _delayed_flush_chunk_acks(self):
         try:
@@ -217,6 +224,10 @@ class AppConsumer(BaseConsumer):
                 await self.handle_login(data)
             elif message_type == "signup":
                 await self.handle_signup(data)
+            elif message_type == "device_login_subscribe":
+                await self.handle_device_login_subscribe(data)
+            elif message_type == "device_login_unsubscribe":
+                await self.handle_device_login_unsubscribe(data)
             elif message_type == "add_user_wallpaper":
                 await self.handle_add_user_wallpaper(data)
             elif message_type == "set_active_wallpaper":
@@ -724,7 +735,6 @@ class AppConsumer(BaseConsumer):
         await sync_to_async(update_user_session_lifetime)(
             self.user, days, current_refresh_token=token
         )
-        await self.send_json({"type": "session_lifetime_updated", "days": days})
 
     async def handle_get_active_sessions(self, data):
         request_id = data.get("request_id")
@@ -969,27 +979,24 @@ class AppConsumer(BaseConsumer):
         challenge_binding = stable_device_login_challenge_binding_from_scope(
             self.scope
         )
-        if not binding_matches_trusted(user, binding):
-            if backup_code:
-                if not verify_and_consume_backup_code(user, backup_code):
-                    return {"error": "invalid_backup_code"}
-                User = get_user_model()
-                User.objects.filter(pk=user.pk).update(trusted_binding_hash=binding)
-                user.trusted_binding_hash = binding
-            else:
-                req_ip, req_ua = ip_and_user_agent_from_scope(self.scope)
-                gate = deferred_login_payload(
-                    user,
-                    binding,
-                    device_challenge_binding_hash=challenge_binding,
-                    request_ip=req_ip,
-                    request_user_agent=req_ua,
-                )
-                if gate:
-                    return gate
+        if binding_matches_active_session(user, binding):
+            pass
+        elif backup_code:
+            if not verify_and_consume_backup_code(user, backup_code):
+                return {"error": "invalid_backup_code"}
+        else:
+            req_ip, req_ua = ip_and_user_agent_from_scope(self.scope)
+            gate = deferred_login_payload(
+                user,
+                binding,
+                device_challenge_binding_hash=challenge_binding,
+                request_ip=req_ip,
+                request_user_agent=req_ua,
+            )
+            if gate:
+                return gate
         refresh = create_refresh_token_for_user(user)
         ws_session = remember_session_from_scope(self.scope, user, refresh)
-        ensure_trusted_from_session_binding(user, ws_session.binding_hash)
         jti = str(refresh["jti"])
         access = get_access_token_for_session(jti, user, ws_session.binding_hash)
         user_data = UserSerializer(user, context={"user": user}).data
@@ -1147,6 +1154,64 @@ class AppConsumer(BaseConsumer):
                 "user": result["user"],
             }
         )
+
+    @database_sync_to_async
+    def _device_login_status_for_scope(self, challenge_id_raw):
+        challenge_id = str(challenge_id_raw or "").strip()
+        if not challenge_id:
+            return {"error": "challenge_id required"}
+        challenge = DeviceLoginChallenge.objects.filter(id=challenge_id).first()
+        if not challenge:
+            return {"error": "not_found"}
+        scope_binding = stable_device_login_challenge_binding_from_scope(self.scope)
+        if scope_binding != challenge.new_binding_hash:
+            return {"error": "wrong_client"}
+        now = timezone.now()
+        if (
+            challenge.status == DeviceLoginChallenge.Status.PENDING
+            and challenge.expires_at <= now
+        ):
+            challenge.status = DeviceLoginChallenge.Status.EXPIRED
+            challenge.save(update_fields=["status"])
+        return {
+            "challenge_id": challenge_id,
+            "status": challenge.status,
+        }
+
+    async def handle_device_login_subscribe(self, data):
+        status_info = await self._device_login_status_for_scope(data.get("challenge_id"))
+        if status_info.get("error"):
+            await self.send_json(
+                {
+                    "type": "device_login_status",
+                    "challenge_id": str(data.get("challenge_id") or ""),
+                    "status": "error",
+                    "error": status_info["error"],
+                }
+            )
+            return
+
+        challenge_id = status_info["challenge_id"]
+        group_name = f"device_login_{challenge_id}"
+        if group_name not in self.device_login_groups:
+            await self.channel_layer.group_add(group_name, self.channel_name)
+            self.device_login_groups.add(group_name)
+        await self.send_json(
+            {
+                "type": "device_login_status",
+                "challenge_id": challenge_id,
+                "status": status_info["status"],
+            }
+        )
+
+    async def handle_device_login_unsubscribe(self, data):
+        challenge_id = str(data.get("challenge_id") or "").strip()
+        if not challenge_id:
+            return
+        group_name = f"device_login_{challenge_id}"
+        if group_name in self.device_login_groups:
+            await self.channel_layer.group_discard(group_name, self.channel_name)
+            self.device_login_groups.discard(group_name)
 
     @database_sync_to_async
     def try_add_group_members_bulk(self, chat_id, user_ids):
@@ -1552,6 +1617,15 @@ class AppConsumer(BaseConsumer):
                 "request_city": event.get("request_city") or "",
                 "request_country": event.get("request_country") or "",
                 "request_device": event.get("request_device") or "",
+            }
+        )
+
+    async def device_login_status(self, event):
+        await self.send_json(
+            {
+                "type": "device_login_status",
+                "challenge_id": event.get("challenge_id"),
+                "status": event.get("status"),
             }
         )
 

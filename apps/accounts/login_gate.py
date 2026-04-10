@@ -1,8 +1,16 @@
-"""Shared device-trust gating after password (or passkey) succeeds."""
+"""Shared device-login gating after password (or Google) succeeds — not passkey."""
 
-from .device_trust import binding_matches_trusted, create_device_challenge
+from .device_trust import (
+    binding_matches_active_session,
+    create_device_challenge,
+    has_active_sessions,
+)
+from .models import DeviceLoginChallenge
 from .session_payload import trusted_device_minimal_label
-from .tasks import deliver_device_login_trusted_notifications
+from .tasks import (
+    deliver_device_login_email_otp,
+    deliver_device_login_trusted_notifications,
+)
 
 
 def deferred_login_payload(
@@ -15,13 +23,14 @@ def deferred_login_payload(
 ) -> dict | None:
     """
     If the user should not receive tokens immediately, return a dict for JSON/WS.
-    None = proceed with full session issuance.
+    None = proceed with full session issuance (trusted binding matches an active session).
 
-    OTP is delivered to trusted sessions via WebSocket; the new device gets
-    ``challenge_id``, optional ``trusted_device`` (minimal label for the trusted
-    session), and must submit the code via device_login_submit_code.
+    - Other active sessions: OTP via WebSocket to trusted clients + security email.
+    - No other sessions: 6-digit code emailed to the user.
+
+    The new device gets ``challenge_id`` and submits the code via device_login_submit_code.
     """
-    if not user.trusted_binding_hash or binding_matches_trusted(user, binding_hash):
+    if binding_matches_active_session(user, binding_hash):
         return None
 
     ch_hash = (
@@ -29,15 +38,32 @@ def deferred_login_payload(
         if device_challenge_binding_hash is not None
         else binding_hash
     )
+    if has_active_sessions(user):
+        challenge, _ = create_device_challenge(
+            user,
+            ch_hash,
+            request_ip=request_ip,
+            request_user_agent=request_user_agent,
+            delivery=DeviceLoginChallenge.Delivery.TRUSTED_DEVICE,
+        )
+        deliver_device_login_trusted_notifications.delay(str(challenge.id))
+        return {
+            "needs_device_confirmation": True,
+            "challenge_id": str(challenge.id),
+            "trusted_device": trusted_device_minimal_label(user),
+            "delivery": "trusted_device",
+        }
+
     challenge, _ = create_device_challenge(
         user,
         ch_hash,
         request_ip=request_ip,
         request_user_agent=request_user_agent,
+        delivery=DeviceLoginChallenge.Delivery.EMAIL,
     )
-    deliver_device_login_trusted_notifications.delay(str(challenge.id))
+    deliver_device_login_email_otp.delay(str(challenge.id))
     return {
         "needs_device_confirmation": True,
         "challenge_id": str(challenge.id),
-        "trusted_device": trusted_device_minimal_label(user),
+        "delivery": "email",
     }

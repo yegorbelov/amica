@@ -51,5 +51,11 @@ urlpatterns = [
     path("passkey/register/finish/", views.passkey_register_finish),
     path("passkey/auth/start/", views.passkey_auth_start),
     path("passkey/auth/finish/", views.passkey_auth_finish),
+    path("passkeys/", views.PasskeysListView.as_view(), name="passkeys_list"),
+    path(
+        "passkeys/<uuid:pk>/",
+        views.PasskeyDetailView.as_view(),
+        name="passkey_delete",
+    ),
     path("active-sessions/", include("apps.accounts.urls.sessions")),
 ]

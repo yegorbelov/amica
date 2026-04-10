@@ -67,7 +67,7 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
             pass
 
     sessions = list(ActiveSession.objects.filter(user=user))
-    session_dicts = []
+    expires_at_by_jti = {}
 
     for session in sessions:
         if days in [500, 1000, 3000, 6000]:
@@ -80,34 +80,20 @@ def update_user_session_lifetime(user, days, current_refresh_token=None):
 
         flush_expired_token.apply_async(args=[session.id], eta=expires_at)
 
-        session_dicts.append(
-            {
-                "jti": session.jti,
-                "device": getattr(session, "device", None),
-                "ip_address": session.ip_address,
-                "created_at": session.created_at.isoformat(),
-                "expires_at": session.expires_at.isoformat(),
-                "last_active": session.last_active.isoformat(),
-                "is_current": session.jti == current_jti,
-            }
-        )
+        expires_at_by_jti[session.jti] = session.expires_at.isoformat()
 
     channel_layer = get_channel_layer()
-    for session_data in session_dicts:
-        async_to_sync(channel_layer.group_send)(
-            f"user_{user.id}",
-            {
-                "type": "session_created",
-                "session": session_data,
-            },
-        )
-
     async_to_sync(channel_layer.group_send)(
         f"user_{user.id}",
         {
             "type": "session_lifetime_updated",
             "days": days,
+            "expires_at_by_jti": expires_at_by_jti,
         },
     )
 
-    return session_dicts
+    return {
+        "days": days,
+        "expires_at_by_jti": expires_at_by_jti,
+        "current_jti": current_jti,
+    }

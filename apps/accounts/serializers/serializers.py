@@ -1,4 +1,5 @@
 from django.contrib.gis.geoip2 import GeoIP2
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -64,7 +65,7 @@ class UserSerializer(serializers.ModelSerializer):
         return mapping.get(obj.id)
 
     def get_has_trusted_device(self, obj):
-        return bool((obj.trusted_binding_hash or "").strip())
+        return obj.sessions.filter(expires_at__gt=timezone.now()).exists()
 
     # def to_representation(self, instance):
     #     ret = super().to_representation(instance)
@@ -104,14 +105,10 @@ class ActiveSessionSerializer(serializers.ModelSerializer):
             "_active_session_geo",
             {"geo": GeoIP2(), "ips": {}},
         )
-        trusted_bh = None
-        if request and request.user.is_authenticated:
-            raw = getattr(request.user, "trusted_binding_hash", None) or ""
-            trusted_bh = raw.strip() or None
         return active_session_model_to_dict(
             instance,
             current_jti=current_jti,
             geo=bucket["geo"],
             ip_cache=bucket["ips"],
-            trusted_binding_hash=trusted_bh,
+            trusted_binding_hash=None,
         )

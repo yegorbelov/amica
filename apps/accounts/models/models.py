@@ -125,6 +125,8 @@ class ActiveSession(models.Model):
 
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
+    # Serialized Sec-CH headers captured at login (for trusted version display).
+    user_agent_hints = models.TextField(blank=True, default="")
 
     # HMAC-SHA256 hex; binds tokens to amica_client_binding_id cookie + browser hints (see session_binding).
     binding_hash = models.CharField(max_length=64, null=True, blank=True)
@@ -153,6 +155,10 @@ class DeviceLoginChallenge(models.Model):
         REJECTED = "rejected", "Rejected"
         EXPIRED = "expired", "Expired"
 
+    class Delivery(models.TextChoices):
+        TRUSTED_DEVICE = "trusted_device", "Trusted device (WS)"
+        EMAIL = "email", "Email OTP"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         CustomUser,
@@ -174,6 +180,11 @@ class DeviceLoginChallenge(models.Model):
     )
     expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+    delivery = models.CharField(
+        max_length=20,
+        choices=Delivery.choices,
+        default=Delivery.TRUSTED_DEVICE,
+    )
 
     class Meta:
         indexes = [
@@ -279,3 +290,32 @@ class AccountBackupCode(models.Model):
 
     def __str__(self):
         return f"AccountBackupCode(user={self.user_id}, used={self.used_at is not None})"
+
+
+class UserWebAuthnCredential(models.Model):
+    """WebAuthn passkeys; replaces legacy CustomUser.credential_* single-credential fields."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="webauthn_credentials",
+    )
+    credential_id = models.BinaryField()
+    public_key = models.BinaryField()
+    sign_count = models.BigIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["credential_id"],
+                name="accounts_webauthn_cred_id_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"UserWebAuthnCredential(user={self.user_id})"

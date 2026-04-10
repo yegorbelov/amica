@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -12,7 +11,6 @@ from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.utils.crypto import constant_time_compare
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -25,6 +23,11 @@ from webauthn import (
     verify_authentication_response,
     verify_registration_response,
 )
+from webauthn.helpers import options_to_json_dict
+from webauthn.helpers.structs import (
+    AttestationConveyancePreference,
+    PublicKeyCredentialDescriptor,
+)
 
 from apps.Site.tasks.flush_expired_tokens import flush_expired_token
 
@@ -35,8 +38,9 @@ from .backup_codes import (
 )
 from .device_trust import (
     CODE_MAX_ATTEMPTS,
-    binding_matches_trusted,
-    ensure_trusted_from_session_binding,
+    binding_matches_active_session,
+    has_active_sessions,
+    notify_device_login_status,
     verify_challenge_code,
 )
 from .login_gate import deferred_login_payload
@@ -45,6 +49,7 @@ from .models import (
     ActiveSession,
     DeviceLoginChallenge,
     EmailVerificationOtp,
+    UserWebAuthnCredential,
 )
 from .recovery_service import (
     EMAIL_VERIFICATION_OTP_MAX_ATTEMPTS,
@@ -53,7 +58,7 @@ from .recovery_service import (
     verify_six_digit_against_hash,
 )
 from .serializers.serializers import ActiveSessionSerializer, UserSerializer
-from .tasks import deliver_device_login_trusted_notifications
+from .tasks import deliver_device_login_email_otp, deliver_device_login_trusted_notifications
 from .totp_service import user_totp_gate_ok
 from .session_binding import (
     JWT_BINDING_CLAIM,
@@ -71,6 +76,38 @@ from .utils.google_login_or_create_user import google_login_or_create_user
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_user_agent_hints_from_meta(meta: dict) -> str:
+    hints = {
+        "sec_ch_ua_full_version_list": (
+            meta.get("HTTP_SEC_CH_UA_FULL_VERSION_LIST") or ""
+        ).strip(),
+        "sec_ch_ua_platform_version": (
+            meta.get("HTTP_SEC_CH_UA_PLATFORM_VERSION") or ""
+        ).strip(),
+        "sec_ch_ua_model": (meta.get("HTTP_SEC_CH_UA_MODEL") or "").strip(),
+    }
+    compact = {k: v for k, v in hints.items() if v}
+    if not compact:
+        return ""
+    return json.dumps(compact, separators=(",", ":"))
+
+
+def _serialize_user_agent_hints_from_scope_headers(headers: dict) -> str:
+    hints = {
+        "sec_ch_ua_full_version_list": (
+            headers.get("sec-ch-ua-full-version-list") or ""
+        ).strip(),
+        "sec_ch_ua_platform_version": (
+            headers.get("sec-ch-ua-platform-version") or ""
+        ).strip(),
+        "sec_ch_ua_model": (headers.get("sec-ch-ua-model") or "").strip(),
+    }
+    compact = {k: v for k, v in hints.items() if v}
+    if not compact:
+        return ""
+    return json.dumps(compact, separators=(",", ":"))
 
 
 def create_refresh_token(user, session_lifetime_days):
@@ -119,6 +156,7 @@ def remember_session(user, refresh, request, old_jti=None, response=None):
         refresh_token=str(refresh),
         ip_address=ip,
         user_agent=request.META.get("HTTP_USER_AGENT"),
+        user_agent_hints=_serialize_user_agent_hints_from_meta(request.META),
         binding_hash=binding_from_request(request, response),
         expires_at=expires_at,
     )
@@ -176,6 +214,7 @@ def remember_session_from_scope(scope, user, refresh, old_jti=None):
         refresh_token=str(refresh),
         ip_address=ip or "ws",
         user_agent=user_agent,
+        user_agent_hints=_serialize_user_agent_hints_from_scope_headers(headers),
         binding_hash=binding_from_scope(scope),
         expires_at=expires_at,
     )
@@ -282,6 +321,8 @@ def _gated_login_response(request, user):
     challenge_binding = compute_binding_hash(
         dev, ua_only_browser_fingerprint_from_meta(request.META)
     )
+    if binding_matches_active_session(user, binding):
+        return None
     gate = deferred_login_payload(
         user,
         binding,
@@ -299,13 +340,6 @@ def _attach_initial_backup_codes_if_issued(user, response: Response) -> None:
     codes = issue_initial_backup_codes_if_needed(user)
     if codes is not None:
         response.data["backup_codes"] = codes
-
-
-def _trusted_device_binding_ok(request, user) -> bool:
-    if not user.trusted_binding_hash:
-        return False
-    binding = binding_from_request(request)
-    return constant_time_compare(binding, user.trusted_binding_hash)
 
 
 def _totp_http_gate(request, user):
@@ -377,14 +411,9 @@ def verify_email_otp(request):
     if gate_totp is not None:
         return gate_totp
 
-    gated = _gated_login_response(request, user)
-    if gated is not None:
-        return gated
-
     refresh = create_refresh_token_for_user(user)
     response = Response({"access": None, "user": None})
     session = remember_session(user, refresh, request, response=response)
-    ensure_trusted_from_session_binding(user, session.binding_hash)
     access = get_access_token_for_session(
         str(refresh["jti"]), user, session.binding_hash
     )
@@ -442,6 +471,9 @@ def device_login_submit_code(request):
         if locked.expires_at <= timezone.now():
             locked.status = DeviceLoginChallenge.Status.EXPIRED
             locked.save(update_fields=["status"])
+            notify_device_login_status(
+                locked.id, DeviceLoginChallenge.Status.EXPIRED
+            )
             return Response({"error": "Challenge expired"}, status=status.HTTP_410_GONE)
         if locked.attempts >= CODE_MAX_ATTEMPTS:
             return Response(
@@ -455,6 +487,7 @@ def device_login_submit_code(request):
         locked.pending_otp = ""
         locked.save(update_fields=["status", "pending_otp"])
 
+    notify_device_login_status(challenge_id, DeviceLoginChallenge.Status.APPROVED)
     return Response({"success": True})
 
 
@@ -496,9 +529,13 @@ def device_login_resend_notify(request):
         challenge.status = DeviceLoginChallenge.Status.EXPIRED
         challenge.pending_otp = ""
         challenge.save(update_fields=["status", "pending_otp"])
+        notify_device_login_status(challenge.id, DeviceLoginChallenge.Status.EXPIRED)
         return Response({"error": "Challenge expired"}, status=status.HTTP_410_GONE)
 
-    deliver_device_login_trusted_notifications.delay(str(challenge.id))
+    if challenge.delivery == DeviceLoginChallenge.Delivery.EMAIL:
+        deliver_device_login_email_otp.delay(str(challenge.id))
+    else:
+        deliver_device_login_trusted_notifications.delay(str(challenge.id))
     return Response({"ok": True})
 
 
@@ -506,11 +543,9 @@ def device_login_resend_notify(request):
 @permission_classes([IsAuthenticated])
 def device_login_trusted_decision(request):
     """
-    Trusted session only: allow (returns OTP) or deny new-device login challenge.
+    Authenticated session can allow (returns OTP) or deny new-device login challenge.
     """
     user = request.user
-    if not _trusted_device_binding_ok(request, user):
-        return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
     challenge_id = request.data.get("challenge_id")
     decision = (request.data.get("decision") or "").strip().lower()
@@ -534,12 +569,14 @@ def device_login_trusted_decision(request):
         challenge.status = DeviceLoginChallenge.Status.EXPIRED
         challenge.pending_otp = ""
         challenge.save(update_fields=["status", "pending_otp"])
+        notify_device_login_status(challenge.id, DeviceLoginChallenge.Status.EXPIRED)
         return Response({"error": "expired"}, status=status.HTTP_410_GONE)
 
     if decision == "deny":
         challenge.status = DeviceLoginChallenge.Status.REJECTED
         challenge.pending_otp = ""
         challenge.save(update_fields=["status", "pending_otp"])
+        notify_device_login_status(challenge.id, DeviceLoginChallenge.Status.REJECTED)
         return Response({"ok": True})
 
     if decision == "allow":
@@ -567,6 +604,7 @@ def device_login_poll(request, challenge_id):
         if challenge.status == DeviceLoginChallenge.Status.PENDING:
             challenge.status = DeviceLoginChallenge.Status.EXPIRED
             challenge.save(update_fields=["status"])
+            notify_device_login_status(challenge.id, DeviceLoginChallenge.Status.EXPIRED)
         return Response({"status": "expired"}, status=status.HTTP_410_GONE)
 
     if challenge.status == DeviceLoginChallenge.Status.PENDING:
@@ -602,7 +640,6 @@ def device_login_poll(request, challenge_id):
         }
     )
     session = remember_session(user, refresh, request, response=response)
-    ensure_trusted_from_session_binding(user, session.binding_hash)
     access = get_access_token_for_session(
         str(refresh["jti"]), user, session.binding_hash
     )
@@ -641,36 +678,34 @@ def api_login(request):
     binding = compute_binding_hash(
         dev, enhanced_browser_fingerprint_from_meta(request.META)
     )
+    challenge_binding = compute_binding_hash(
+        dev, ua_only_browser_fingerprint_from_meta(request.META)
+    )
 
-    if not binding_matches_trusted(user, binding):
-        if backup_code:
-            if not verify_and_consume_backup_code(user, backup_code):
-                err_resp = Response(
-                    {"error": "invalid_backup_code"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-                attach_client_binding_cookie_if_needed(request, err_resp)
-                return err_resp
-            User.objects.filter(pk=user.pk).update(trusted_binding_hash=binding)
-            user.trusted_binding_hash = binding
-        else:
-            challenge_binding = compute_binding_hash(
-                dev, ua_only_browser_fingerprint_from_meta(request.META)
+    if binding_matches_active_session(user, binding):
+        pass
+    elif backup_code:
+        if not verify_and_consume_backup_code(user, backup_code):
+            err_resp = Response(
+                {"error": "invalid_backup_code"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            gate = deferred_login_payload(
-                user,
-                binding,
-                device_challenge_binding_hash=challenge_binding,
-                request_ip=get_client_ip(request),
-                request_user_agent=request.META.get("HTTP_USER_AGENT") or "",
-            )
-            if gate:
-                response.data = gate
-                return ensure_client_binding_cookie(request, response)
+            attach_client_binding_cookie_if_needed(request, err_resp)
+            return err_resp
+    else:
+        gate = deferred_login_payload(
+            user,
+            binding,
+            device_challenge_binding_hash=challenge_binding,
+            request_ip=get_client_ip(request),
+            request_user_agent=request.META.get("HTTP_USER_AGENT") or "",
+        )
+        if gate:
+            response.data = gate
+            return ensure_client_binding_cookie(request, response)
 
     refresh = create_refresh_token_for_user(user)
     session = remember_session(user, refresh, request, response=response)
-    ensure_trusted_from_session_binding(user, session.binding_hash)
     access = get_access_token_for_session(
         str(refresh["jti"]), user, session.binding_hash
     )
@@ -721,7 +756,6 @@ def google_login(request):
     serializer = UserSerializer(user, context={"request": request})
     response = Response({"access": None, "user": None})
     session = remember_session(user, refresh, request, response=response)
-    ensure_trusted_from_session_binding(user, session.binding_hash)
     access = get_access_token_for_session(
         str(refresh["jti"]), user, session.binding_hash
     )
@@ -735,11 +769,6 @@ def google_login(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def backup_codes_status(request):
-    if not _trusted_device_binding_ok(request, request.user):
-        return Response(
-            {"error": "trusted_device_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
     n = AccountBackupCode.objects.filter(
         user=request.user, used_at__isnull=True
     ).count()
@@ -749,11 +778,6 @@ def backup_codes_status(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def backup_codes_regenerate(request):
-    if not _trusted_device_binding_ok(request, request.user):
-        return Response(
-            {"error": "trusted_device_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
     codes = regenerate_backup_codes(request.user)
     response = Response({"backup_codes": codes})
     return ensure_client_binding_cookie(request, response)
@@ -762,11 +786,6 @@ def backup_codes_regenerate(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def totp_setup_start(request):
-    if not _trusted_device_binding_ok(request, request.user):
-        return Response(
-            {"error": "trusted_device_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
     from .totp_service import build_otpauth_uri, encrypt_totp_secret, generate_totp_secret
 
     secret = generate_totp_secret()
@@ -780,11 +799,6 @@ def totp_setup_start(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def totp_setup_confirm(request):
-    if not _trusted_device_binding_ok(request, request.user):
-        return Response(
-            {"error": "trusted_device_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
     from .totp_service import verify_totp_code_against_cipher
 
     code = (request.data.get("code") or "").strip()
@@ -812,11 +826,6 @@ def totp_setup_confirm(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def totp_disable(request):
-    if not _trusted_device_binding_ok(request, request.user):
-        return Response(
-            {"error": "trusted_device_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
     from .totp_service import verify_totp_code_against_cipher
 
     password = request.data.get("password") or ""
@@ -917,6 +926,11 @@ def passkey_register_start(request):
             {"error": "User not found. Signup first"}, status=status.HTTP_404_NOT_FOUND
         )
 
+    exclude_credentials = [
+        PublicKeyCredentialDescriptor(id=c.credential_id)
+        for c in UserWebAuthnCredential.objects.filter(user=user)
+    ]
+
     options = generate_registration_options(
         rp_id=request.get_host().split(":")[0],
         rp_name="Amica",
@@ -924,7 +938,8 @@ def passkey_register_start(request):
         user_name=email,
         user_display_name=user.display_name,
         authenticator_selection=None,
-        attestation="none",
+        attestation=AttestationConveyancePreference.NONE,
+        exclude_credentials=exclude_credentials,
     )
 
     request.session["passkey_challenge"] = (
@@ -932,7 +947,7 @@ def passkey_register_start(request):
     )
     request.session["passkey_user_email"] = email
 
-    response_data = asdict(options)
+    response_data = options_to_json_dict(options)
     response_data["pubKeyCredParams"] = [
         {"type": "public-key", "alg": -7},
         {"type": "public-key", "alg": -257},
@@ -986,16 +1001,18 @@ def passkey_register_finish(request):
             expected_origin=settings.WEBAUTHN_ORIGIN,
             expected_rp_id=request.get_host().split(":")[0],
         )
-        user.credential_id = webauthn_resp.credential_id
-        user.credential_public_key = webauthn_resp.credential_public_key
-        user.sign_count = webauthn_resp.sign_count
-        user.save()
-
-        gated = _gated_login_response(request, user)
-        if gated is not None:
-            del request.session["passkey_challenge"]
-            del request.session["passkey_user_email"]
-            return gated
+        with transaction.atomic():
+            UserWebAuthnCredential.objects.create(
+                user=user,
+                credential_id=webauthn_resp.credential_id,
+                public_key=webauthn_resp.credential_public_key,
+                sign_count=webauthn_resp.sign_count,
+            )
+            User.objects.filter(pk=user.pk).update(
+                credential_id=None,
+                credential_public_key=None,
+                sign_count=0,
+            )
 
         refresh = RefreshToken.for_user(user)
         serializer = UserSerializer(user, context={"request": request})
@@ -1003,7 +1020,6 @@ def passkey_register_finish(request):
             {"success": True, "message": "Passkey registered", **serializer.data}
         )
         session = remember_session(user, refresh, request, response=response)
-        ensure_trusted_from_session_binding(user, session.binding_hash)
         _attach_initial_backup_codes_if_issued(user, response)
         response = set_refresh_cookie(response, refresh)
 
@@ -1021,11 +1037,11 @@ def passkey_register_finish(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def passkey_auth_start(request):
-    users_with_passkeys = User.objects.filter(credential_id__isnull=False)
-
     credentials = []
-    for user in users_with_passkeys:
-        cred_id_b64 = base64.urlsafe_b64encode(user.credential_id).decode().rstrip("=")
+    for row in UserWebAuthnCredential.objects.all().only("credential_id"):
+        cred_id_b64 = (
+            base64.urlsafe_b64encode(row.credential_id).decode().rstrip("=")
+        )
         credentials.append({"type": "public-key", "id": cred_id_b64})
 
     options = generate_authentication_options(
@@ -1067,11 +1083,14 @@ def passkey_auth_finish(request):
 
         credential_id = base64url_to_bytes(body["rawId"])
         try:
-            user = User.objects.get(credential_id=credential_id)
-        except User.DoesNotExist:
+            cred = UserWebAuthnCredential.objects.select_related("user").get(
+                credential_id=credential_id
+            )
+        except UserWebAuthnCredential.DoesNotExist:
             return Response(
                 {"error": "Passkey not found"}, status=status.HTTP_404_NOT_FOUND
             )
+        user = cred.user
 
         credential = {
             "id": body["id"],
@@ -1090,12 +1109,12 @@ def passkey_auth_finish(request):
             expected_challenge=expected_challenge,
             expected_origin=settings.WEBAUTHN_ORIGIN,
             expected_rp_id=settings.WEBAUTHN_RP_ID,
-            credential_public_key=user.credential_public_key,
-            credential_current_sign_count=user.sign_count,
+            credential_public_key=cred.public_key,
+            credential_current_sign_count=cred.sign_count,
         )
 
-        user.sign_count = webauthn_resp.new_sign_count
-        user.save()
+        cred.sign_count = webauthn_resp.new_sign_count
+        cred.save(update_fields=["sign_count"])
 
         if not user.email_verified_at:
             del request.session["passkey_challenge"]
@@ -1108,11 +1127,6 @@ def passkey_auth_finish(request):
         if gate_totp is not None:
             return gate_totp
 
-        gated = _gated_login_response(request, user)
-        if gated is not None:
-            del request.session["passkey_challenge"]
-            return gated
-
         refresh = RefreshToken.for_user(user)
         serializer = UserSerializer(user, context={"request": request})
         response = Response(
@@ -1124,7 +1138,6 @@ def passkey_auth_finish(request):
             }
         )
         session = remember_session(user, refresh, request, response=response)
-        ensure_trusted_from_session_binding(user, session.binding_hash)
         access = get_access_token_for_session(
             str(refresh["jti"]), user, session.binding_hash
         )
@@ -1137,6 +1150,32 @@ def passkey_auth_finish(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PasskeysListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = UserWebAuthnCredential.objects.filter(user=request.user).order_by(
+            "-created_at"
+        )
+        data = [
+            {"id": str(c.id), "created_at": c.created_at.isoformat()} for c in qs
+        ]
+        return Response({"passkeys": data})
+
+
+class PasskeyDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        cred = get_object_or_404(
+            UserWebAuthnCredential,
+            id=pk,
+            user=request.user,
+        )
+        cred.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ActiveSessionsView(APIView):

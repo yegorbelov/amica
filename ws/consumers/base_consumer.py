@@ -89,7 +89,12 @@ class BaseConsumer(AsyncWebsocketConsumer):
             return
 
         if not self.scope.get("auth_valid"):
-            if data.get("type") in ("login", "signup"):
+            if data.get("type") in (
+                "login",
+                "signup",
+                "device_login_subscribe",
+                "device_login_unsubscribe",
+            ):
                 try:
                     await self.handle_message(data)
                 except Exception as e:

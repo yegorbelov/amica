@@ -13,6 +13,7 @@ from .models.models import (
     EmailVerificationOtp,
     RecoveryEmailOtp,
     DeviceLoginChallenge,
+    UserWebAuthnCredential,
 )
 
 
@@ -51,6 +52,15 @@ class ProfileInline(admin.StackedInline):
     verbose_name_plural = "Profile"
     fk_name = "user"
     extra = 0
+
+
+@admin.register(UserWebAuthnCredential)
+class UserWebAuthnCredentialAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "created_at", "sign_count")
+    list_filter = ("created_at",)
+    search_fields = ("user__email",)
+    raw_id_fields = ("user",)
+    readonly_fields = ("credential_id", "public_key", "sign_count", "created_at")
 
 
 @admin.register(CustomUser)

@@ -12,6 +12,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from .email_html import (
+    device_login_email_otp,
     email_verification,
     login_attempt_alert,
     recovery_alert,
@@ -109,6 +110,11 @@ def send_recovery_alert_email(user, cooldown_until) -> None:
 def send_recovery_otp_email(user, code: str) -> None:
     text, html_body = recovery_otp(code)
     send_html_email(user.email, "Amica: your recovery code", text, html_body)
+
+
+def send_device_login_email_otp(user, code: str) -> None:
+    text, html_body = device_login_email_otp(code)
+    send_html_email(user.email, "Amica: your sign-in code", text, html_body)
 
 
 def send_device_login_attempt_email(

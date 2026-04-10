@@ -1,4 +1,4 @@
-"""Single trusted device: new bindings require approval on the trusted client."""
+"""Device-login challenge helpers and realtime notifications."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.utils import timezone
 
-from .models import DeviceLoginChallenge
+from .models import ActiveSession, DeviceLoginChallenge
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,21 @@ def verify_challenge_code(challenge: DeviceLoginChallenge, code: str) -> bool:
     return hmac.compare_digest(_hash_code(normalized), challenge.code_hash)
 
 
-def binding_matches_trusted(user, binding_hash: str) -> bool:
-    if not user.trusted_binding_hash:
-        return True
-    return binding_hash == user.trusted_binding_hash
+def has_active_sessions(user) -> bool:
+    return ActiveSession.objects.filter(
+        user=user,
+        expires_at__gt=timezone.now(),
+    ).exists()
+
+
+def binding_matches_active_session(user, binding_hash: str) -> bool:
+    if not binding_hash:
+        return False
+    return ActiveSession.objects.filter(
+        user=user,
+        binding_hash=binding_hash,
+        expires_at__gt=timezone.now(),
+    ).exists()
 
 
 def create_device_challenge(
@@ -48,6 +59,7 @@ def create_device_challenge(
     *,
     request_ip: str | None = None,
     request_user_agent: str | None = None,
+    delivery: str = DeviceLoginChallenge.Delivery.TRUSTED_DEVICE,
 ) -> tuple[DeviceLoginChallenge, str]:
     DeviceLoginChallenge.objects.filter(
         user=user, status=DeviceLoginChallenge.Status.PENDING
@@ -63,6 +75,7 @@ def create_device_challenge(
         request_ip=request_ip or None,
         request_user_agent=ua,
         expires_at=timezone.now() + CHALLENGE_TTL,
+        delivery=delivery,
     )
     return challenge, code
 
@@ -97,14 +110,22 @@ def notify_trusted_devices(
         logger.warning("device_login notify failed for user %s: %s", user_id, e)
 
 
-def ensure_trusted_from_session_binding(user, session_binding_hash: str | None) -> None:
-    if not session_binding_hash or user.trusted_binding_hash:
-        return
-    from django.db.models import Q
-
-    from .models import CustomUser
-
-    CustomUser.objects.filter(pk=user.pk).filter(
-        Q(trusted_binding_hash__isnull=True) | Q(trusted_binding_hash="")
-    ).update(trusted_binding_hash=session_binding_hash)
-    user.trusted_binding_hash = session_binding_hash
+def notify_device_login_status(challenge_id, status: str) -> None:
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            f"device_login_{challenge_id}",
+            {
+                "type": "device_login_status",
+                "challenge_id": str(challenge_id),
+                "status": status,
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            "device_login status notify failed for challenge %s: %s",
+            challenge_id,
+            e,
+        )
