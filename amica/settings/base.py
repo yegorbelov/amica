@@ -310,3 +310,9 @@ SIMPLE_JWT = {
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
 
 GEOIP_PATH = os.path.join(BASE_DIR, "geoip")
+
+
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+]

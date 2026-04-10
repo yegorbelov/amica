@@ -46,3 +46,4 @@ black==26.1.0
 
 #services
 geoip2==5.2.0
+argon2-cffi==25.1.0
