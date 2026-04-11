@@ -1123,10 +1123,6 @@ def passkey_auth_finish(request):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        gate_totp = _totp_http_gate(request, user)
-        if gate_totp is not None:
-            return gate_totp
-
         refresh = RefreshToken.for_user(user)
         serializer = UserSerializer(user, context={"request": request})
         response = Response(
