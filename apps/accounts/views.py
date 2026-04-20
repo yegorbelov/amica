@@ -337,31 +337,54 @@ def _gated_login_response(request, user):
 
 
 def _attach_initial_backup_codes_if_issued(user, response: Response) -> None:
+    """Issue backup codes only when TOTP is the guard for the account and none exist yet.
+
+    Kept for backward compatibility with users who enabled TOTP before backup codes
+    were wired into the setup-confirm response. New enrollments receive codes
+    directly from ``totp_setup_confirm`` instead of on the first login.
+    """
+    if not user.totp_enabled:
+        return
     codes = issue_initial_backup_codes_if_needed(user)
     if codes is not None:
         response.data["backup_codes"] = codes
 
 
 def _totp_http_gate(request, user):
-    """Require totp_code in JSON when user has TOTP enabled."""
+    """When TOTP is enabled, require totp_code OR a one-time backup_code in JSON.
+
+    Backup code is the account-recovery fallback for a lost authenticator; on success
+    the code is consumed atomically. It does NOT bypass the device-confirmation step
+    that runs afterwards — only the possession factor.
+    """
     if not user.totp_enabled:
         return None
     code = (request.data.get("totp_code") or "").strip()
-    if not code:
-        err = Response(
-            {"error": "totp_required"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-        attach_client_binding_cookie_if_needed(request, err)
-        return ensure_client_binding_cookie(request, err)
-    if not user_totp_gate_ok(user, code):
-        err = Response(
-            {"error": "invalid_totp"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-        attach_client_binding_cookie_if_needed(request, err)
-        return ensure_client_binding_cookie(request, err)
-    return None
+    backup_code = (request.data.get("backup_code") or "").strip()
+    if code:
+        if not user_totp_gate_ok(user, code):
+            err = Response(
+                {"error": "invalid_totp"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            attach_client_binding_cookie_if_needed(request, err)
+            return ensure_client_binding_cookie(request, err)
+        return None
+    if backup_code:
+        if not verify_and_consume_backup_code(user, backup_code):
+            err = Response(
+                {"error": "invalid_backup_code"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            attach_client_binding_cookie_if_needed(request, err)
+            return ensure_client_binding_cookie(request, err)
+        return None
+    err = Response(
+        {"error": "totp_required"},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+    attach_client_binding_cookie_if_needed(request, err)
+    return ensure_client_binding_cookie(request, err)
 
 
 @api_view(["GET"])
@@ -655,7 +678,6 @@ def device_login_poll(request, challenge_id):
 def api_login(request):
     identifier = request.data.get("email") or request.data.get("username")
     password = request.data.get("password")
-    backup_code = (request.data.get("backup_code") or "").strip()
     user = authenticate(username=identifier, password=password)
     if not user:
         return Response({"error": "Invalid credentials"}, status=400)
@@ -682,17 +704,7 @@ def api_login(request):
         dev, ua_only_browser_fingerprint_from_meta(request.META)
     )
 
-    if binding_matches_active_session(user, binding):
-        pass
-    elif backup_code:
-        if not verify_and_consume_backup_code(user, backup_code):
-            err_resp = Response(
-                {"error": "invalid_backup_code"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-            attach_client_binding_cookie_if_needed(request, err_resp)
-            return err_resp
-    else:
+    if not binding_matches_active_session(user, binding):
         gate = deferred_login_payload(
             user,
             binding,
@@ -769,15 +781,26 @@ def google_login(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def backup_codes_status(request):
-    n = AccountBackupCode.objects.filter(
-        user=request.user, used_at__isnull=True
-    ).count()
-    return Response({"unused_count": n})
+    """Recovery codes exist only while TOTP is enabled; rows are cleared on TOTP disable."""
+    totp_on = bool(request.user.totp_enabled)
+    n = (
+        AccountBackupCode.objects.filter(
+            user=request.user, used_at__isnull=True
+        ).count()
+        if totp_on
+        else 0
+    )
+    return Response({"unused_count": n, "totp_enabled": totp_on})
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def backup_codes_regenerate(request):
+    if not request.user.totp_enabled:
+        return Response(
+            {"error": "totp_not_enabled"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     codes = regenerate_backup_codes(request.user)
     response = Response({"backup_codes": codes})
     return ensure_client_binding_cookie(request, response)
@@ -820,7 +843,11 @@ def totp_setup_confirm(request):
         )
     request.user.totp_enabled = True
     request.user.save(update_fields=["totp_enabled"])
-    return Response({"success": True, "totp_enabled": True})
+    response = Response({"success": True, "totp_enabled": True})
+    codes = issue_initial_backup_codes_if_needed(request.user)
+    if codes is not None:
+        response.data["backup_codes"] = codes
+    return response
 
 
 @api_view(["POST"])
@@ -829,7 +856,8 @@ def totp_disable(request):
     from .totp_service import verify_totp_code_against_cipher
 
     password = request.data.get("password") or ""
-    code = (request.data.get("code") or "").strip()
+    totp_code = (request.data.get("code") or "").strip()
+    backup_code = (request.data.get("backup_code") or "").strip()
     if not authenticate(username=request.user.email, password=password):
         return Response(
             {"error": "invalid_password"},
@@ -841,14 +869,27 @@ def totp_disable(request):
             {"error": "totp_not_enabled"},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if not verify_totp_code_against_cipher(cipher, code):
+    if backup_code:
+        if not verify_and_consume_backup_code(request.user, backup_code):
+            return Response(
+                {"error": "invalid_backup_code"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    elif totp_code:
+        if not verify_totp_code_against_cipher(cipher, totp_code):
+            return Response(
+                {"error": "invalid_totp"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    else:
         return Response(
-            {"error": "invalid_totp"},
+            {"error": "second_factor_required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
     request.user.totp_secret_cipher = ""
     request.user.totp_enabled = False
     request.user.save(update_fields=["totp_secret_cipher", "totp_enabled"])
+    AccountBackupCode.objects.filter(user=request.user).delete()
     return Response({"success": True})
 
 

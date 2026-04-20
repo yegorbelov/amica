@@ -1,4 +1,4 @@
-"""One-time backup codes for signing in without a trusted device (hashed at rest)."""
+"""One-time backup codes used as a second-factor fallback when TOTP is lost (hashed at rest)."""
 
 from __future__ import annotations
 

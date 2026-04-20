@@ -971,20 +971,20 @@ class AppConsumer(BaseConsumer):
             }
         if user.totp_enabled:
             tc = (totp_code or "").strip()
-            if not tc:
+            bc = (backup_code or "").strip()
+            if tc:
+                if not user_totp_gate_ok(user, tc):
+                    return {"error": "invalid_totp"}
+            elif bc:
+                if not verify_and_consume_backup_code(user, bc):
+                    return {"error": "invalid_backup_code"}
+            else:
                 return {"error": "totp_required"}
-            if not user_totp_gate_ok(user, tc):
-                return {"error": "invalid_totp"}
         binding = binding_from_scope(self.scope)
         challenge_binding = stable_device_login_challenge_binding_from_scope(
             self.scope
         )
-        if binding_matches_active_session(user, binding):
-            pass
-        elif backup_code:
-            if not verify_and_consume_backup_code(user, backup_code):
-                return {"error": "invalid_backup_code"}
-        else:
+        if not binding_matches_active_session(user, binding):
             req_ip, req_ua = ip_and_user_agent_from_scope(self.scope)
             gate = deferred_login_payload(
                 user,
