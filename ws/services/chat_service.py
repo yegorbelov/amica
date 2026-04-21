@@ -17,7 +17,10 @@ class ChatService:
         if not message:
             raise ValueError("Failed to create message")
 
-        serialized = MessageSerializer(message, context={"user_id": user.id}).data
+        ctx = {"user_id": user.id}
+        if message.chat.is_channel:
+            ctx["channel_messages"] = True
+        serialized = MessageSerializer(message, context=ctx).data
 
         return {
             "chat_id": chat_id,

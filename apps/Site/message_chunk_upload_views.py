@@ -24,6 +24,7 @@ from rest_framework.views import APIView
 from apps.media_files.models.models import File, ImageFile, VideoFile
 
 from .models import Chat, Message
+from .services.chat_permissions import user_can_post_in_chat
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,13 @@ def chunk_init_service(
 
     if not chat.users.filter(id=user.id).exists():
         return {"ok": False, "error": "User not in chat", "http_status": 403}
+
+    if not user_can_post_in_chat(chat, user):
+        return {
+            "ok": False,
+            "error": "You cannot post in this channel",
+            "http_status": 403,
+        }
 
     upload_id = str(uuid.uuid4())
     chunk_count = max(1, math.ceil(total_size / use_chunk))
@@ -433,6 +441,13 @@ def chunk_bundle_complete_service(
 
     if not chat.users.filter(id=user.id).exists():
         return {"ok": False, "error": "User not in chat", "http_status": 403}
+
+    if not user_can_post_in_chat(chat, user):
+        return {
+            "ok": False,
+            "error": "You cannot post in this channel",
+            "http_status": 403,
+        }
 
     if not message_text and not upload_ids:
         return {"ok": False, "error": "Message or files required", "http_status": 400}

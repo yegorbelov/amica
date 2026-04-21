@@ -14,7 +14,9 @@ def search_groups_globally_for_user(user, query: str, limit: int = 40):
 
     lim = max(1, min(int(limit), 100))
     qs = (
-        Chat.objects.filter(chat_type=Chat.ChatType.GROUP)
+        Chat.objects.filter(
+            chat_type__in=(Chat.ChatType.GROUP, Chat.ChatType.CHANNEL)
+        )
         .annotate(users_count=Count("chatmember", distinct=True))
         .filter(name__icontains=q)
         .order_by("-created_at")[:lim]
@@ -39,6 +41,11 @@ def search_groups_globally_for_user(user, query: str, limit: int = 40):
     ct_contact = ContentType.objects.get_for_model(Contact).id
     ct_profile = ContentType.objects.get_for_model(Profile).id
 
+    my_roles_map = dict(
+        ChatMember.objects.filter(user=user, chat_id__in=object_ids).values_list(
+            "chat_id", "role"
+        )
+    )
     context = {
         "user": user,
         "user_id": user.id,
@@ -48,6 +55,7 @@ def search_groups_globally_for_user(user, query: str, limit: int = 40):
         "ct_profile_id": ct_profile,
         "ct_chat_id": ct_chat,
         "interlocutors_map": {},
+        "my_roles_map": my_roles_map,
     }
     data = ChatListSerializer(chats, many=True, context=context).data
     member_chat_ids = set(

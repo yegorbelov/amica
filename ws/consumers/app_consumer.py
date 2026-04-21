@@ -53,6 +53,11 @@ from apps.Site.serializers import ChatListSerializer, ChatUserSerializer, Messag
 from apps.Site.services.get_chats_service import get_chats_list
 from apps.Site.services.get_chat_service import get_chat_for_user
 from apps.Site.services.get_contacts_service import get_contacts_for_user
+from apps.Site.services.chat_permissions import (
+    user_can_post_in_chat,
+    user_is_channel_subscriber,
+)
+from apps.Site.services.create_channel_service import create_channel_and_serialize
 from apps.Site.services.create_group_service import create_group_and_serialize
 from apps.Site.services.get_general_info_service import get_general_info_for_user
 from channels.layers import get_channel_layer
@@ -172,6 +177,7 @@ class AppConsumer(BaseConsumer):
                 "add_group_member",
                 "remove_group_member",
                 "rename_group",
+                "set_channel_member_role",
             )
             and not chat_id
         ):
@@ -194,6 +200,10 @@ class AppConsumer(BaseConsumer):
                 await self.handle_remove_group_member(data, data.get("chat_id"))
             elif message_type == "rename_group":
                 await self.handle_rename_group(data, data.get("chat_id"))
+            elif message_type == "set_channel_member_role":
+                await self.handle_set_channel_member_role(
+                    data, data.get("chat_id")
+                )
             elif message_type == "update_username":
                 await self.handle_update_username(data)
             elif message_type == "message_reaction":
@@ -236,6 +246,8 @@ class AppConsumer(BaseConsumer):
                 await self.handle_delete_user_wallpaper(data)
             elif message_type == "create_group":
                 await self.handle_create_group(data)
+            elif message_type == "create_channel":
+                await self.handle_create_channel(data)
             elif message_type == "message_chunk_init":
                 await self.handle_message_chunk_init(data)
             elif message_type == "message_chunk_part":
@@ -559,6 +571,63 @@ class AppConsumer(BaseConsumer):
 
         await asyncio.gather(*(send_one(uid) for uid in remaining_ids))
 
+    async def handle_set_channel_member_role(self, data, chat_id):
+        if chat_id is None:
+            await self.send_json(
+                {"type": "error", "message": "chat_id is required"}
+            )
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "chat_id must be a number"}
+            )
+            return
+
+        inner = data.get("data") or {}
+        target_user_id = inner.get("user_id")
+        role = inner.get("role")
+        if target_user_id is None:
+            await self.send_json(
+                {"type": "error", "message": "user_id is required"}
+            )
+            return
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            await self.send_json(
+                {"type": "error", "message": "user_id must be a number"}
+            )
+            return
+
+        err = await self.try_set_channel_member_role(
+            chat_id, target_user_id, role
+        )
+        if err:
+            await self.send_json({"type": "error", "message": err})
+            return
+
+        user_ids = await self.get_chat_user_ids(chat_id)
+        if not user_ids:
+            return
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROADCASTS)
+
+        async def send_one(uid):
+            async with semaphore:
+                body = await self.build_group_members_updated_event(
+                    chat_id, uid, None
+                )
+                payload_safe = json.loads(json.dumps(body, default=str))
+                await self.send_to_user_group(
+                    uid,
+                    "group_members_updated",
+                    **payload_safe,
+                )
+
+        await asyncio.gather(*(send_one(uid) for uid in user_ids))
+
     async def handle_rename_group(self, data, chat_id):
         if chat_id is None:
             await self.send_json(
@@ -661,6 +730,35 @@ class AppConsumer(BaseConsumer):
                 }
             )
 
+    async def handle_create_channel(self, data):
+        raw = (data.get("data") or {}).get("name")
+        if raw is None:
+            await self.send_json(
+                {"type": "error", "message": "name is required"}
+            )
+            return
+        name = str(raw).strip()
+        try:
+            serialized = await database_sync_to_async(create_channel_and_serialize)(
+                self.user, name
+            )
+            chat_id = serialized["id"]
+            self.chat_users_cache[chat_id] = [self.user.id]
+            payload_safe = json.loads(json.dumps({"chat": serialized}, default=str))
+            await self.send_to_user_group(
+                self.user.id, "chat_created", **payload_safe
+            )
+        except ValueError as e:
+            await self.send_json({"type": "error", "message": str(e)})
+        except Exception as e:
+            logger.exception("create_channel failed: %s", e)
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Failed to create channel",
+                }
+            )
+
     async def handle_message_reaction(self, data):
         message_id = data.get("message_id")
         if not message_id:
@@ -686,6 +784,15 @@ class AppConsumer(BaseConsumer):
         if not chat_id or not await self.user_in_chat(chat_id):
             await self.send_json(
                 {"type": "error", "message": "Message not found or no access"}
+            )
+            return
+
+        if await self.user_is_channel_subscriber_in_chat(chat_id):
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Channel subscribers can only view messages",
+                }
             )
             return
 
@@ -1214,6 +1321,14 @@ class AppConsumer(BaseConsumer):
             self.device_login_groups.discard(group_name)
 
     @database_sync_to_async
+    def user_is_channel_subscriber_in_chat(self, chat_id):
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return False
+        return user_is_channel_subscriber(chat, self.user)
+
+    @database_sync_to_async
     def try_add_group_members_bulk(self, chat_id, user_ids):
         """Returns (added_user_ids, error_message). added_user_ids may be empty."""
         User = get_user_model()
@@ -1221,9 +1336,11 @@ class AppConsumer(BaseConsumer):
             chat = Chat.objects.get(id=chat_id)
         except Chat.DoesNotExist:
             return [], "Chat not found"
-        if not chat.is_group:
-            return [], "Not a group chat"
-        if not chat.users.filter(id=self.user.id).exists():
+        if not (chat.is_group or chat.is_channel):
+            return [], "Not a group or channel chat"
+        if chat.is_channel:
+            return [], "Channels grow by subscription; members cannot be added directly"
+        elif not chat.users.filter(id=self.user.id).exists():
             return [], "Not a member of chat"
 
         seen = set()
@@ -1256,12 +1373,17 @@ class AppConsumer(BaseConsumer):
         if not to_create:
             return [], None
 
+        default_role = (
+            ChatMember.Role.MEMBER
+            if chat.is_group
+            else ChatMember.Role.SUBSCRIBER
+        )
         added = []
         with transaction.atomic():
             for new_user_id in to_create:
                 new_user = User.objects.get(id=new_user_id)
                 ChatMember.objects.create(
-                    chat=chat, user=new_user, role=ChatMember.Role.MEMBER
+                    chat=chat, user=new_user, role=default_role
                 )
                 added.append(new_user_id)
 
@@ -1278,9 +1400,16 @@ class AppConsumer(BaseConsumer):
             chat = Chat.objects.get(id=chat_id)
         except Chat.DoesNotExist:
             return "Chat not found"
-        if not chat.is_group:
-            return "Not a group chat"
-        if not chat.users.filter(id=self.user.id).exists():
+        if not (chat.is_group or chat.is_channel):
+            return "Not a group or channel chat"
+        actor_cm = ChatMember.objects.filter(chat=chat, user=self.user).first()
+        if chat.is_channel:
+            if not actor_cm or actor_cm.role not in (
+                ChatMember.Role.OWNER,
+                ChatMember.Role.ADMIN,
+            ):
+                return "Only channel admins can rename the channel"
+        elif not chat.users.filter(id=self.user.id).exists():
             return "Not a member of chat"
         chat.name = name
         chat.save(update_fields=["name"])
@@ -1314,6 +1443,13 @@ class AppConsumer(BaseConsumer):
         context = {"user": recipient, "user_id": recipient.id}
         qs = chat.users.all().exclude(pk=recipient.pk)
         members_data = ChatUserSerializer(qs, many=True, context=context).data
+        role_map = dict(
+            ChatMember.objects.filter(chat=chat).values_list("user_id", "role")
+        )
+        for row in members_data:
+            uid = row.get("id")
+            if uid is not None and uid in role_map:
+                row["chat_role"] = role_map[uid]
         out = {
             "chat_id": chat_id,
             "members": members_data,
@@ -1332,10 +1468,36 @@ class AppConsumer(BaseConsumer):
             chat = Chat.objects.get(id=chat_id)
         except Chat.DoesNotExist:
             return "Chat not found", None
-        if not chat.is_group:
-            return "Not a group chat", None
-        if not chat.users.filter(id=self.user.id).exists():
-            return "Not a member of chat", None
+        if not (chat.is_group or chat.is_channel):
+            return "Not a group or channel chat", None
+        actor_cm = ChatMember.objects.filter(chat=chat, user=self.user).first()
+        target_cm = ChatMember.objects.filter(
+            chat=chat, user_id=target_user_id
+        ).first()
+        if chat.is_channel:
+            if (
+                target_user_id == self.user.id
+                and target_cm
+                and target_cm.role == ChatMember.Role.SUBSCRIBER
+            ):
+                pass
+            elif not actor_cm or actor_cm.role not in (
+                ChatMember.Role.OWNER,
+                ChatMember.Role.ADMIN,
+            ):
+                return "Only channel admins can remove members", None
+            elif not target_cm:
+                return "User is not in this chat", None
+            elif target_cm.role == ChatMember.Role.OWNER:
+                return "Cannot remove channel owner", None
+            elif (
+                actor_cm.role == ChatMember.Role.ADMIN
+                and target_cm.role != ChatMember.Role.SUBSCRIBER
+            ):
+                return "Not allowed", None
+        else:
+            if not chat.users.filter(id=self.user.id).exists():
+                return "Not a member of chat", None
         if not chat.users.filter(id=target_user_id).exists():
             return "User is not in this chat", None
 
@@ -1354,6 +1516,46 @@ class AppConsumer(BaseConsumer):
             "removed_id": target_user_id,
             "remaining_ids": remaining_ids,
         }
+
+    @database_sync_to_async
+    def try_set_channel_member_role(self, chat_id, target_user_id, role):
+        if role not in ("admin", "subscriber"):
+            return "Invalid role"
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return "Chat not found"
+        if not chat.is_channel:
+            return "Not a channel"
+        actor_cm = ChatMember.objects.filter(chat=chat, user=self.user).first()
+        if not actor_cm or actor_cm.role not in (
+            ChatMember.Role.OWNER,
+            ChatMember.Role.ADMIN,
+        ):
+            return "Not allowed"
+        target_cm = ChatMember.objects.filter(
+            chat=chat, user_id=target_user_id
+        ).first()
+        if not target_cm:
+            return "User is not in this channel"
+        if target_user_id == self.user.id:
+            return "Cannot change own role"
+        if role == "admin":
+            if target_cm.role != ChatMember.Role.SUBSCRIBER:
+                return "Can only promote subscribers to admin"
+        else:
+            if target_cm.role != ChatMember.Role.ADMIN:
+                return "Can only demote admins to subscriber"
+            if actor_cm.role != ChatMember.Role.OWNER:
+                return "Only the owner can remove an admin"
+        target_cm.role = (
+            ChatMember.Role.ADMIN
+            if role == "admin"
+            else ChatMember.Role.SUBSCRIBER
+        )
+        target_cm.save(update_fields=["role"])
+        self.chat_users_cache.pop(chat_id, None)
+        return None
 
     @database_sync_to_async
     def get_or_create_dialog(self, other_user_id):
@@ -1423,9 +1625,18 @@ class AppConsumer(BaseConsumer):
     @database_sync_to_async
     def delete_chat(self, chat_id, user):
         try:
-            chat = Chat.objects.filter(id=chat_id, users=user).first()
+            chat = Chat.objects.filter(id=chat_id).first()
             if not chat:
                 return False
+            if not chat.users.filter(id=user.id).exists():
+                return False
+            if chat.is_channel:
+                cm = ChatMember.objects.filter(chat=chat, user=user).first()
+                if not cm or cm.role not in (
+                    ChatMember.Role.OWNER,
+                    ChatMember.Role.ADMIN,
+                ):
+                    return False
             chat.delete()
             self.chat_users_cache.pop(chat_id, None)
             return True
@@ -1437,6 +1648,8 @@ class AppConsumer(BaseConsumer):
     def save_message(self, chat_id, user, message_content):
         try:
             chat = Chat.objects.get(id=chat_id)
+            if not user_can_post_in_chat(chat, user):
+                return None
             message = Message.objects.create(
                 chat=chat, user=user, value=message_content
             )
@@ -1487,13 +1700,19 @@ class AppConsumer(BaseConsumer):
 
     @database_sync_to_async
     def serialize_message(self, message, requesting_user):
-        serializer = MessageSerializer(message, context={"user_id": requesting_user.id})
+        ctx = {"user_id": requesting_user.id}
+        if message.chat.is_channel:
+            ctx["channel_messages"] = True
+        serializer = MessageSerializer(message, context=ctx)
         return serializer.data
 
     @database_sync_to_async
     def serialize_message_for_recipient(self, message, recipient_id):
         """Serialize message so is_own is True only for the recipient who is the author."""
-        serializer = MessageSerializer(message, context={"user_id": recipient_id})
+        ctx = {"user_id": recipient_id}
+        if message.chat.is_channel:
+            ctx["channel_messages"] = True
+        serializer = MessageSerializer(message, context=ctx)
         return serializer.data
 
     @database_sync_to_async

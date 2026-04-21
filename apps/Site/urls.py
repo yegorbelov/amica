@@ -26,10 +26,16 @@ urlpatterns = [
     path("users/search/", UserEmailSearchView.as_view(), name="user-email-search"),
     path("groups/search/", GroupSearchView.as_view(), name="group-search"),
     path("groups/create/", CreateGroupView.as_view(), name="group-create"),
+    path("channels/create/", CreateChannelView.as_view(), name="channel-create"),
     path(
         "groups/<int:chat_id>/join/",
         JoinGroupView.as_view(),
         name="group-join",
+    ),
+    path(
+        "groups/<int:chat_id>/leave/",
+        LeaveGroupView.as_view(),
+        name="group-leave",
     ),
     path(
         "protected-file/<int:file_id>/",

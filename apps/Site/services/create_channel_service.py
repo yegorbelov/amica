@@ -1,18 +1,18 @@
-"""Create a group chat and return ChatListSerializer-shaped payload (incl. members)."""
+"""Create a channel chat (admins post; subscribers read-only)."""
 
 from apps.Site.models import Chat, ChatMember
 from apps.Site.serializers import ChatListSerializer, ChatUserSerializer
 
 
-def create_group_and_serialize(user, name: str) -> dict:
+def create_channel_and_serialize(user, name: str) -> dict:
     name = (name or "").strip()
     if not name:
-        raise ValueError("Group name cannot be empty")
+        raise ValueError("Channel name cannot be empty")
     if len(name) > 64:
-        raise ValueError("Group name too long")
+        raise ValueError("Channel name too long")
 
     chat = Chat.objects.create(
-        chat_type=Chat.ChatType.GROUP,
+        chat_type=Chat.ChatType.CHANNEL,
         name=name,
     )
     ChatMember.objects.create(

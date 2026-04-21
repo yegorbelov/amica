@@ -117,9 +117,13 @@ def get_chats_list(user, chat_ids=None):
 
     unread_map = dict(
         MessageRecipient.objects.filter(
-            user=user, deleted_at__isnull=True, message__deleted_at__isnull=True, read_date__isnull=True
+            user=user,
+            deleted_at__isnull=True,
+            message__deleted_at__isnull=True,
+            read_date__isnull=True,
         )
         .exclude(message__user=user)
+        .exclude(message__chat__chat_type=Chat.ChatType.CHANNEL)
         .values("message__chat_id")
         .annotate(cnt=Count("id"))
         .values_list("message__chat_id", "cnt")
@@ -129,6 +133,12 @@ def get_chats_list(user, chat_ids=None):
         chat.last_message = last_message_map.get(chat.id)
         chat.unread_count = unread_map.get(chat.id, 0)
 
+    my_roles_map = dict(
+        ChatMember.objects.filter(
+            user=user, chat_id__in=[c.id for c in chats_qs]
+        ).values_list("chat_id", "role")
+    )
+
     context = {
         "user": user,
         "user_id": user.id,
@@ -137,6 +147,7 @@ def get_chats_list(user, chat_ids=None):
         "ct_contact_id": ct_contact,
         "ct_profile_id": ct_profile,
         "ct_chat_id": ct_chat,
+        "my_roles_map": my_roles_map,
         "interlocutors_map": {
             chat.id: (
                 chat.other_members[0].user if chat.other_members else None

@@ -10,9 +10,10 @@ def send_ws_message(message, sender_id):
     user_ids = list(chat.users.values_list("id", flat=True))
 
     for recipient_id in user_ids:
-        serialized_message = MessageSerializer(
-            message, context={"user_id": recipient_id}
-        ).data
+        ctx = {"user_id": recipient_id}
+        if chat.is_channel:
+            ctx["channel_messages"] = True
+        serialized_message = MessageSerializer(message, context=ctx).data
         async_to_sync(channel_layer.group_send)(
             f"user_{recipient_id}",
             {
@@ -33,9 +34,10 @@ def send_ws_message_updated(message, sender_id):
     user_ids = list(chat.users.values_list("id", flat=True))
 
     for recipient_id in user_ids:
-        serialized_message = MessageSerializer(
-            message, context={"user_id": recipient_id}
-        ).data
+        ctx = {"user_id": recipient_id}
+        if chat.is_channel:
+            ctx["channel_messages"] = True
+        serialized_message = MessageSerializer(message, context=ctx).data
         async_to_sync(channel_layer.group_send)(
             f"user_{recipient_id}",
             {

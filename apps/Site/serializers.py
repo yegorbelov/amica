@@ -74,6 +74,7 @@ class MessageSerializer(serializers.ModelSerializer):
     # view_count = serializers.SerializerMethodField()
     is_viewed = serializers.SerializerMethodField()
     viewers = serializers.SerializerMethodField()
+    view_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -94,6 +95,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # "reply_to_message",
             "is_viewed",
             "viewers",
+            "view_count",
         ]
         read_only_fields = fields
 
@@ -118,6 +120,8 @@ class MessageSerializer(serializers.ModelSerializer):
         return serialized_files
 
     def get_is_viewed(self, obj):
+        if self.context.get("channel_messages"):
+            return True
         return bool(getattr(obj, "read_recipients", []))
 
     def _get_current_user_id(self):
@@ -182,7 +186,20 @@ class MessageSerializer(serializers.ModelSerializer):
             }
         return None
 
+    def get_view_count(self, obj):
+        if not self.context.get("channel_messages"):
+            return None
+        if hasattr(obj, "view_count"):
+            return obj.view_count
+        from apps.Site.models import MessageRecipient
+
+        return MessageRecipient.objects.filter(
+            message_id=obj.pk, read_date__isnull=False
+        ).count()
+
     def get_viewers(self, obj):
+        if self.context.get("channel_messages"):
+            return []
         recipients = getattr(obj, "read_recipients", [])
 
         recipients = [r for r in recipients if r.user_id != obj.user_id]
@@ -363,6 +380,7 @@ class ChatListSerializer(serializers.ModelSerializer):
     info = serializers.SerializerMethodField()
     type = serializers.CharField(source="chat_type")
     peer_user_id = serializers.SerializerMethodField()
+    my_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Chat
@@ -375,6 +393,7 @@ class ChatListSerializer(serializers.ModelSerializer):
             "primary_media",
             "info",
             "peer_user_id",
+            "my_role",
         ]
 
     def _get_display_cached(self, obj):
@@ -476,11 +495,12 @@ class ChatListSerializer(serializers.ModelSerializer):
 
     def get_last_message(self, obj):
         message = getattr(obj, "last_message", None)
-        return (
-            MessageSerializer(message, context=self.context).data
-            if message
-            else None
-        )
+        if not message:
+            return None
+        ctx = {**self.context}
+        if obj.is_channel:
+            ctx["channel_messages"] = True
+        return MessageSerializer(message, context=ctx).data
 
     def get_unread_count(self, obj):
         return getattr(obj, "unread_count", 0)
@@ -490,6 +510,12 @@ class ChatListSerializer(serializers.ModelSerializer):
             return None
         interlocutor = self._get_interlocutor_cached(obj)
         return interlocutor.id if interlocutor else None
+
+    def get_my_role(self, obj):
+        if obj.is_dialog:
+            return None
+        roles_map = self.context.get("my_roles_map") or {}
+        return roles_map.get(obj.pk)
 
 
 from apps.accounts.serializers.serializers import ProfileSerializer
@@ -538,6 +564,7 @@ class ChatSerializer(serializers.ModelSerializer):
     media = serializers.SerializerMethodField()
     members = serializers.SerializerMethodField()
     peer_user_id = serializers.SerializerMethodField()
+    my_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Chat
@@ -551,16 +578,33 @@ class ChatSerializer(serializers.ModelSerializer):
             "media",
             "members",
             "peer_user_id",
+            "my_role",
         ]
 
     def get_members(self, obj):
         user = self._get_current_user()
+        if obj.is_channel and user:
+            cm = ChatMember.objects.filter(chat=obj, user=user).first()
+            if not cm or cm.role not in (
+                ChatMember.Role.OWNER,
+                ChatMember.Role.ADMIN,
+            ):
+                return []
+
         qs = obj.users.all()
 
         if user:
             qs = qs.exclude(pk=user.pk)
 
-        return ChatUserSerializer(qs, many=True, context=self.context).data
+        rows = ChatUserSerializer(qs, many=True, context=self.context).data
+        role_map = dict(
+            ChatMember.objects.filter(chat=obj).values_list("user_id", "role")
+        )
+        for row in rows:
+            uid = row.get("id")
+            if uid is not None and uid in role_map:
+                row["chat_role"] = role_map[uid]
+        return rows
 
     def _get_display_cached(self, obj):
         if not hasattr(self, "_display_cache"):
@@ -699,6 +743,15 @@ class ChatSerializer(serializers.ModelSerializer):
             return None
         interlocutor = self._get_interlocutor_cached(obj)
         return interlocutor.id if interlocutor else None
+
+    def get_my_role(self, obj):
+        if obj.is_dialog:
+            return None
+        user = self._get_current_user()
+        if not user:
+            return None
+        cm = ChatMember.objects.filter(chat=obj, user=user).first()
+        return cm.role if cm else None
 
 
 from django.conf import settings

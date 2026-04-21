@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch, Q
 
 from apps.Site.models import Chat, Contact, Message, MessageRecipient
 from apps.Site.serializers import ChatSerializer
@@ -52,7 +52,7 @@ def get_chat_for_user(
     Returns: chat dict with messages, media, members, next_cursor (for older), next_newer_cursor (for newer).
     """
     chat = (
-        Chat.objects.filter(id=chat_id, users=user)
+        Chat.objects.filter(id=chat_id)
         .prefetch_related(
             "users",
             "display_media",
@@ -64,7 +64,60 @@ def get_chat_for_user(
     if not chat:
         raise Chat.DoesNotExist("Chat not found")
 
-    if cursor_newer is not None:
+    is_member = user is not None and chat.users.filter(pk=user.pk).exists()
+    if not chat.is_channel and not is_member:
+        raise Chat.DoesNotExist("Chat not found")
+
+    # Channels: list messages by chat only (no MessageRecipient join). New subscribers
+    # see full history; DM/groups keep per-recipient visibility.
+    if chat.is_channel:
+        if cursor_newer is not None:
+            messages_qs = (
+                Message.objects.filter(
+                    chat_id=chat_id,
+                    deleted_at__isnull=True,
+                    id__gt=cursor_newer,
+                )
+                .select_related("user")
+                .prefetch_related("file", "message_reactions")
+                .annotate(
+                    view_count=Count(
+                        "recipients",
+                        filter=Q(recipients__read_date__isnull=False),
+                    )
+                )
+                .order_by("date")
+            )
+            messages = list(messages_qs[:page_size])
+            next_newer_cursor = (
+                messages[-1].id if len(messages) == page_size and messages else None
+            )
+            next_cursor = None
+        else:
+            messages_qs = (
+                Message.objects.filter(
+                    chat_id=chat_id,
+                    deleted_at__isnull=True,
+                )
+                .select_related("user")
+                .prefetch_related("file", "message_reactions")
+                .annotate(
+                    view_count=Count(
+                        "recipients",
+                        filter=Q(recipients__read_date__isnull=False),
+                    )
+                )
+                .order_by("-date")
+            )
+            if cursor is not None:
+                messages_qs = messages_qs.filter(id__lt=cursor)
+            messages = list(messages_qs[:page_size])
+            messages.reverse()
+            next_cursor = (
+                messages[0].id if len(messages) == page_size and messages else None
+            )
+            next_newer_cursor = None
+    elif cursor_newer is not None:
         messages_qs = (
             Message.objects.filter(
                 chat_id=chat_id,
@@ -131,6 +184,7 @@ def get_chat_for_user(
             "message_file_ids_by_message_id": file_order_map,
             "dialog_contact": dialog_contact,
             "dialog_contact_interlocutor_id": dialog_contact_interlocutor_id,
+            "channel_messages": chat.is_channel,
         },
     )
     data = serializer.data

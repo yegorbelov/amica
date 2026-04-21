@@ -26,7 +26,9 @@ from .serializers import MessageSerializer
 from .services.get_chats_service import get_chats_list
 from .services.get_chat_service import get_chat_for_user
 from .services.get_general_info_service import get_general_info_for_user
+from .services.create_channel_service import create_channel_and_serialize
 from .services.create_group_service import create_group_and_serialize
+from .services.chat_permissions import user_can_post_in_chat
 from .services.search_groups_service import search_groups_globally_for_user
 from .utils import *
 
@@ -110,21 +112,46 @@ class GetMessagesAPIView(APIView):
         page_size = int(request.GET.get("page_size", 50))
 
         try:
-            chat = Chat.objects.get(id=chat_id, users=request.user)
-            recipients_prefetch = Prefetch(
-                "recipients",
-                queryset=MessageRecipient.objects.select_related("user").filter(
-                    read_date__isnull=False
-                ),
-                to_attr="read_recipients",
-            )
+            chat = Chat.objects.get(id=chat_id)
+            if not chat.is_channel and not chat.users.filter(
+                id=request.user.id
+            ).exists():
+                return Response({"error": "Chat not found"}, status=404)
+            if chat.is_channel:
+                messages_qs = (
+                    chat.messages.filter(deleted_at__isnull=True)
+                    .select_related("user", "user__profile", "reply_to")
+                    .prefetch_related("file", "message_reactions")
+                    .annotate(
+                        view_count=Count(
+                            "recipients",
+                            filter=Q(recipients__read_date__isnull=False),
+                        )
+                    )
+                    .order_by("-date")
+                )
+                serializer_context = {
+                    "request": request,
+                    "channel_messages": True,
+                }
+            else:
+                recipients_prefetch = Prefetch(
+                    "recipients",
+                    queryset=MessageRecipient.objects.select_related("user").filter(
+                        read_date__isnull=False
+                    ),
+                    to_attr="read_recipients",
+                )
 
-            messages_qs = (
-                chat.messages.filter(deleted_at__isnull=True)
-                .select_related("user", "user__profile", "reply_to")
-                .prefetch_related("file", recipients_prefetch, "message_reactions")
-                .order_by("-date")
-            )
+                messages_qs = (
+                    chat.messages.filter(deleted_at__isnull=True)
+                    .select_related("user", "user__profile", "reply_to")
+                    .prefetch_related(
+                        "file", recipients_prefetch, "message_reactions"
+                    )
+                    .order_by("-date")
+                )
+                serializer_context = {"request": request}
             if cursor_id:
                 messages_qs = messages_qs.filter(id__lt=cursor_id)
 
@@ -132,7 +159,7 @@ class GetMessagesAPIView(APIView):
             messages.reverse()
 
             serializer = MessageSerializer(
-                messages, many=True, context={"request": request}
+                messages, many=True, context=serializer_context
             )
 
             next_cursor = messages[-1].id if messages else None
@@ -164,7 +191,10 @@ class MessageReactionView(APIView):
 
             result = message.set_user_reaction(request.user, reaction_type)
 
-            serializer = MessageSerializer(message, context={"request": request})
+            rctx = {"request": request}
+            if message.chat.is_channel:
+                rctx["channel_messages"] = True
+            serializer = MessageSerializer(message, context=rctx)
             return Response(
                 {"success": True, "user_reactions": result, "message": serializer.data}
             )
@@ -344,7 +374,10 @@ class MessageViewSet(viewsets.ViewSet):
             last_message = self.get_queryset(chat_id).order_by("-date").first()
             if not last_message:
                 return Response({"message": None})
-            serializer = MessageSerializer(last_message, context={"request": request})
+            mctx = {"request": request}
+            if last_message.chat.is_channel:
+                mctx["channel_messages"] = True
+            serializer = MessageSerializer(last_message, context=mctx)
             return Response({"message": serializer.data})
         except Exception as e:
             logger.error(f"MessageViewSet retrieve error: {str(e)}")
@@ -367,6 +400,12 @@ class MessageViewSet(viewsets.ViewSet):
 
             if not chat.users.filter(id=user.id).exists():
                 return JsonResponse({"error": "User not in chat"}, status=403)
+
+            if not user_can_post_in_chat(chat, user):
+                return JsonResponse(
+                    {"error": "You cannot post in this channel"},
+                    status=403,
+                )
 
             if not message_text and not files:
                 return JsonResponse(
@@ -504,10 +543,13 @@ class MessageViewSet(viewsets.ViewSet):
 
     def update(self, request, pk=None):
         try:
-            message = Message.objects.get(pk=pk, user=request.user)
-            serializer = MessageSerializer(
-                message, data=request.data, context={"request": request}
+            message = Message.objects.select_related("chat").get(
+                pk=pk, user=request.user
             )
+            uctx = {"request": request}
+            if message.chat.is_channel:
+                uctx["channel_messages"] = True
+            serializer = MessageSerializer(message, data=request.data, context=uctx)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data)
@@ -519,9 +561,14 @@ class MessageViewSet(viewsets.ViewSet):
 
     def partial_update(self, request, pk=None):
         try:
-            message = Message.objects.get(pk=pk, user=request.user)
+            message = Message.objects.select_related("chat").get(
+                pk=pk, user=request.user
+            )
+            pctx = {"request": request}
+            if message.chat.is_channel:
+                pctx["channel_messages"] = True
             serializer = MessageSerializer(
-                message, data=request.data, partial=True, context={"request": request}
+                message, data=request.data, partial=True, context=pctx
             )
             if serializer.is_valid():
                 serializer.save()
@@ -717,24 +764,106 @@ class CreateGroupView(APIView):
         return Response({"chat": serialized}, status=status.HTTP_201_CREATED)
 
 
+class CreateChannelView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        raw = request.data.get("name")
+        if raw is None:
+            return Response(
+                {"error": "name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = str(raw).strip()
+        try:
+            serialized = create_channel_and_serialize(request.user, name)
+        except ValueError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception("CreateChannelView failed")
+            return Response(
+                {"error": "Failed to create channel"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            channel_layer = get_channel_layer()
+            payload_safe = json.loads(json.dumps({"chat": serialized}, default=str))
+            async_to_sync(channel_layer.group_send)(
+                f"user_{request.user.id}",
+                {"type": "chat_created", **payload_safe},
+            )
+        except Exception as e:
+            logger.error("Channels error on create channel: %s", e)
+
+        return Response({"chat": serialized}, status=status.HTTP_201_CREATED)
+
+
 class JoinGroupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, chat_id):
         try:
             chat = Chat.objects.get(
-                id=chat_id, chat_type=Chat.ChatType.GROUP
+                id=chat_id,
+                chat_type__in=(Chat.ChatType.GROUP, Chat.ChatType.CHANNEL),
             )
         except Chat.DoesNotExist:
             return Response(
                 {"error": "Group not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        default_role = (
+            ChatMember.Role.MEMBER
+            if chat.chat_type == Chat.ChatType.GROUP
+            else ChatMember.Role.SUBSCRIBER
+        )
         ChatMember.objects.get_or_create(
             chat=chat,
             user=request.user,
-            defaults={"role": ChatMember.Role.MEMBER},
+            defaults={"role": default_role},
         )
+        return Response({"ok": True}, status=status.HTTP_200_OK)
+
+
+class LeaveGroupView(APIView):
+    """Remove current user from a group/channel (no chat_deleted WS; for quiet channel unsubscribe)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, chat_id):
+        try:
+            chat = Chat.objects.get(
+                id=chat_id,
+                chat_type__in=(Chat.ChatType.GROUP, Chat.ChatType.CHANNEL),
+            )
+        except Chat.DoesNotExist:
+            return Response(
+                {"error": "Chat not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        cm = ChatMember.objects.filter(chat=chat, user=request.user).first()
+        if not cm:
+            return Response(
+                {"error": "Not a member"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if chat.is_channel and cm.role == ChatMember.Role.OWNER:
+            return Response(
+                {"error": "Owner cannot leave the channel this way"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ChatMember.objects.filter(pk=cm.pk).delete()
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return Response({"ok": True}, status=status.HTTP_200_OK)
+        remaining_ids = list(chat.users.values_list("id", flat=True))
+        if not remaining_ids:
+            chat.delete()
         return Response({"ok": True}, status=status.HTTP_200_OK)
 
 
