@@ -86,7 +86,8 @@ class DisplayMediaViewSet(viewsets.ViewSet):
         media = serializer.save()
         output_serializer = DisplayMediaSerializer(media, context={"request": request})
 
-        if obj.user == request.user:
+        # Profile has .user and .profile_media; Chat/Contact use other relations.
+        if hasattr(obj, "profile_media") and getattr(obj, "user", None) == request.user:
             self.notify_avatar_updated(obj, request=request)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
